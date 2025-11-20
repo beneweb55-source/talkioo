@@ -9,16 +9,17 @@ import {
   deleteConversationAPI, 
   sendFriendRequestAPI, 
   getIncomingFriendRequestsAPI,
-  respondToFriendRequestAPI
-} from './services/mockBackend';
-import { MessageSquarePlus, LogOut, X, MessageCircleCode, UserPlus, Bell, Check, X as XIcon, CheckCheck } from 'lucide-react';
+  respondToFriendRequestAPI,
+  subscribeToFriendRequests
+} from './services/supabaseService';
+import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, CheckCheck, LogOut, X, Copy } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 
 const Dashboard = () => {
   const { user, logout } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   
   // Notifications & Requests
@@ -33,35 +34,50 @@ const Dashboard = () => {
   const [modalError, setModalError] = useState('');
   const [modalSuccess, setModalSuccess] = useState('');
 
-  const fetchAllData = async () => {
-    if (!user) return;
-    
-    // 1. Fetch Conversations
-    const convs = await getConversationsAPI(user.id);
-    setConversations(convs);
-    
-    // 2. Fetch Friend Requests
-    const reqs = await getIncomingFriendRequestsAPI(user.id);
-    // Si le nombre de requête change (nouvelle requête), on met à jour le compteur
-    if (reqs.length > friendRequests.length) {
-        setUnreadNotifsCount(prev => prev + (reqs.length - friendRequests.length));
-    }
-    setFriendRequests(reqs);
-    
-    setLoading(false);
+  // Fetch Data Functions
+  const fetchConversations = async () => {
+      if(!user) return;
+      const convs = await getConversationsAPI(user.id);
+      setConversations(convs);
   };
 
-  // Poll for updates
-  useEffect(() => {
-    fetchAllData();
-    const interval = setInterval(fetchAllData, 3000); 
-    return () => clearInterval(interval);
-  }, [user]);
+  const fetchRequests = async () => {
+      if(!user) return;
+      const reqs = await getIncomingFriendRequestsAPI(user.id);
+      setFriendRequests(reqs);
+      
+      // Update badge count if it differs (mostly for initial load)
+      const pendingCount = reqs.filter(r => r.status === 'pending').length;
+      setUnreadNotifsCount(pendingCount);
+  };
 
-  // Initial badge set
+  // Initial Load + Realtime Subscriptions
   useEffect(() => {
-      setUnreadNotifsCount(friendRequests.length);
-  }, [friendRequests.length]);
+    if (!user) return;
+
+    const init = async () => {
+        setLoading(true);
+        await Promise.all([fetchConversations(), fetchRequests()]);
+        setLoading(false);
+    };
+    init();
+
+    // Subscribe to NEW Friend Requests (Realtime)
+    const unsubscribeRequests = subscribeToFriendRequests(user.id, () => {
+        // When a new request comes in via WebSocket:
+        fetchRequests(); // Refresh the list
+        // Trigger a browser notification or sound here if desired
+    });
+
+    // Poll conversations less aggressively (every 10s) just in case new chats appear
+    // (Ideally we would subscribe to 'participants' table changes too)
+    const interval = setInterval(fetchConversations, 10000);
+
+    return () => {
+        unsubscribeRequests();
+        clearInterval(interval);
+    };
+  }, [user]);
 
   const handleSendFriendRequest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,6 +91,8 @@ const Dashboard = () => {
         await sendFriendRequestAPI(user.id, newChatTarget);
         setModalSuccess(`Demande envoyée à ${newChatTarget} !`);
         setNewChatTarget('');
+        
+        // Close modal after short delay
         setTimeout(() => {
             setIsModalOpen(false);
             setModalSuccess('');
@@ -86,32 +104,36 @@ const Dashboard = () => {
     }
   };
 
-  const handleRespondToRequest = async (requestId: number, status: 'accepted' | 'rejected') => {
+  const handleRespondToRequest = async (requestId: string, status: 'accepted' | 'rejected') => {
       try {
+        // Optimistic UI update
+        setFriendRequests(prev => prev.filter(r => r.id !== requestId));
+        setUnreadNotifsCount(prev => Math.max(0, prev - 1));
+
         const newConv = await respondToFriendRequestAPI(requestId, status);
-        // Refresh UI immediatement
-        await fetchAllData();
         
         if (status === 'accepted' && newConv) {
-            setActiveConversationId(newConv.id);
+            await fetchConversations(); // Refresh list to show new chat
+            setActiveConversationId(newConv.id); // Open it
             setShowNotifications(false);
-            setUnreadNotifsCount(prev => Math.max(0, prev - 1));
         }
       } catch (err) {
           console.error("Erreur lors de la réponse à la demande", err);
+          fetchRequests(); // Revert on error
       }
   };
 
-  const handleDeleteConversation = async (id: number) => {
+  const handleDeleteConversation = async (id: string) => {
       const success = await deleteConversationAPI(id);
       if (success) {
           if (activeConversationId === id) setActiveConversationId(null);
-          fetchAllData();
+          fetchConversations();
       }
   };
 
-  const handleMarkNotificationsRead = () => {
-      setUnreadNotifsCount(0);
+  const copyToClipboard = () => {
+      navigator.clipboard.writeText(`${user?.username}#${user?.tag}`);
+      // Visual feedback could be added here
   };
 
   const activeConversation = conversations.find(c => c.id === activeConversationId);
@@ -138,21 +160,22 @@ const Dashboard = () => {
                 </div>
                 
                 <p className="text-sm text-gray-500 mb-6">
-                   Entrez l'identifiant unique <b>Nom#ID</b>. Si la personne accepte votre demande, une conversation s'ouvrira automatiquement.
+                   Entrez l'identifiant unique <b>Nom#1234</b>. Si la personne accepte, une conversation s'ouvrira.
                 </p>
                 
                 <form onSubmit={handleSendFriendRequest}>
                     <Input 
                         label="Identifiant Talkio"
-                        placeholder="ex: alice#1"
+                        placeholder="ex: Alice#9402"
                         value={newChatTarget}
                         onChange={(e) => setNewChatTarget(e.target.value)}
                         autoFocus
+                        className="text-lg"
                     />
                     
                     {modalError && (
-                        <div className="mb-4 text-sm text-red-600 bg-red-50 p-3 rounded border border-red-100">
-                            {modalError}
+                        <div className="mb-4 text-sm text-red-600 bg-red-50 p-3 rounded border border-red-100 flex items-center gap-2">
+                             <XIcon size={16} /> {modalError}
                         </div>
                     )}
 
@@ -164,7 +187,7 @@ const Dashboard = () => {
                     
                     <div className="flex justify-end gap-3 mt-6">
                         <Button type="button" variant="secondary" className="w-auto" onClick={() => setIsModalOpen(false)} disabled={modalLoading}>
-                            Fermer
+                            Annuler
                         </Button>
                         <Button type="submit" className="w-auto" isLoading={modalLoading} disabled={!newChatTarget.trim() || !!modalSuccess}>
                             Envoyer demande
@@ -178,14 +201,16 @@ const Dashboard = () => {
       {/* Sidebar */}
       <div className={`${activeConversationId ? 'hidden md:flex' : 'flex'} w-full md:w-[350px] lg:w-[400px] bg-white border-r border-gray-200 flex-col z-20 shadow-xl shadow-gray-200/50`}>
         {/* Sidebar Header */}
-        <div className="h-16 bg-white flex items-center justify-between px-4 border-b border-gray-100 shrink-0 relative">
-           <div className="flex items-center gap-3 overflow-hidden">
+        <div className="h-16 bg-white flex items-center justify-between px-4 border-b border-gray-100 shrink-0 relative z-30">
+           <div className="flex items-center gap-3 overflow-hidden group cursor-pointer" onClick={copyToClipboard} title="Cliquez pour copier votre ID">
              <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-100 to-orange-200 border border-orange-200 flex items-center justify-center text-orange-600 font-bold flex-shrink-0 shadow-sm">
                {user?.username.charAt(0).toUpperCase()}
              </div>
              <div className="flex flex-col overflow-hidden">
-                 <span className="font-semibold text-gray-800 truncate">{user?.username}</span>
-                 <span className="text-xs text-orange-600 font-bold bg-orange-50 px-1.5 rounded-sm w-fit">#{user?.id}</span>
+                 <span className="font-semibold text-gray-800 truncate group-hover:text-orange-600 transition-colors">{user?.username}</span>
+                 <span className="text-xs text-orange-600 font-bold bg-orange-50 px-1.5 rounded-sm w-fit flex items-center gap-1">
+                    #{user?.tag} <Copy size={8} />
+                 </span>
              </div>
            </div>
            <div className="flex gap-1 text-gray-500 flex-shrink-0">
@@ -199,7 +224,7 @@ const Dashboard = () => {
                   >
                     <Bell size={22} />
                     {unreadNotifsCount > 0 && (
-                        <span className="absolute top-1 right-1 h-4 w-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[9px] text-white font-bold animate-bounce">
+                        <span className="absolute top-1 right-1 h-4 w-4 bg-red-500 rounded-full border-2 border-white flex items-center justify-center text-[9px] text-white font-bold animate-pulse shadow-sm">
                             {unreadNotifsCount}
                         </span>
                     )}
@@ -207,14 +232,9 @@ const Dashboard = () => {
 
                   {/* Dropdown Notifications */}
                   {showNotifications && (
-                      <div className="absolute top-full right-0 mt-2 w-80 bg-white rounded-xl shadow-2xl border border-gray-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden">
+                      <div className="absolute top-full right-0 mt-2 w-80 bg-white rounded-xl shadow-2xl border border-gray-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden ring-1 ring-black ring-opacity-5">
                           <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-100">
                              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Demandes d'amis</h3>
-                             {unreadNotifsCount > 0 && (
-                                <button onClick={handleMarkNotificationsRead} className="text-[10px] text-orange-600 font-medium hover:underline flex items-center gap-1">
-                                    <CheckCheck size={12} /> Tout marquer comme lu
-                                </button>
-                             )}
                           </div>
                           
                           {friendRequests.length === 0 ? (
@@ -227,7 +247,7 @@ const Dashboard = () => {
                                   {friendRequests.map(req => (
                                       <div key={req.id} className="flex items-center justify-between p-3 hover:bg-gray-50 border-b border-gray-50 last:border-0 transition-colors">
                                           <div className="flex items-center gap-3">
-                                              <div className="h-8 w-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-xs font-bold">
+                                              <div className="h-9 w-9 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-sm font-bold">
                                                   {req.sender?.username.charAt(0).toUpperCase()}
                                               </div>
                                               <div className="flex flex-col">
@@ -241,14 +261,14 @@ const Dashboard = () => {
                                                 className="p-1.5 bg-gray-100 text-gray-500 rounded-full hover:bg-red-100 hover:text-red-600 transition-colors"
                                                 title="Refuser"
                                               >
-                                                  <XIcon size={14} />
+                                                  <XIcon size={16} />
                                               </button>
                                               <button 
                                                 onClick={() => handleRespondToRequest(req.id, 'accepted')}
                                                 className="p-1.5 bg-orange-100 text-orange-600 rounded-full hover:bg-orange-200 transition-colors shadow-sm"
                                                 title="Accepter"
                                               >
-                                                  <Check size={14} />
+                                                  <Check size={16} />
                                               </button>
                                           </div>
                                       </div>
@@ -305,17 +325,21 @@ const Dashboard = () => {
             <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 text-gray-500 p-6 text-center relative overflow-hidden select-none">
                 <div className="absolute inset-0 opacity-5 bg-[radial-gradient(#f97316_1px,transparent_1px)] [background-size:16px_16px]"></div>
                 
-                <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center mb-8 shadow-xl shadow-orange-100 relative z-10 border border-orange-50">
+                <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center mb-8 shadow-xl shadow-orange-100 relative z-10 border border-orange-50 animate-in zoom-in duration-500">
                     <MessageCircleCode className="text-orange-500" size={64} />
                 </div>
                 <h1 className="text-4xl font-bold text-gray-800 mb-4 relative z-10 tracking-tight">Talkio <span className="text-orange-600">Connect</span></h1>
                 <p className="text-base max-w-md text-center mb-8 text-gray-600 leading-relaxed relative z-10">
-                    Communiquez simplement. Sans interruption.<br/>
-                    <span className="text-sm mt-2 block">Partagez votre ID pour recevoir des demandes :</span>
+                    Connecté au Cloud Supabase.<br/>
+                    <span className="text-sm mt-2 block">Partagez votre ID unique :</span>
                 </p>
                 
-                <div className="relative z-10 bg-white px-6 py-3 rounded-full shadow-md border border-gray-200 flex items-center gap-3 mb-8 group cursor-pointer hover:border-orange-300 transition-colors" onClick={() => {navigator.clipboard.writeText(`${user?.username}#${user?.id}`); setModalSuccess("Copié !")}}>
-                     <span className="font-mono text-lg font-bold text-gray-800 tracking-wide">{user?.username}<span className="text-orange-500">#{user?.id}</span></span>
+                <div 
+                    className="relative z-10 bg-white px-6 py-3 rounded-full shadow-md border border-gray-200 flex items-center gap-3 mb-8 group cursor-pointer hover:border-orange-300 transition-colors transform hover:scale-105 active:scale-95 duration-200" 
+                    onClick={copyToClipboard}
+                >
+                     <span className="font-mono text-lg font-bold text-gray-800 tracking-wide">{user?.username}<span className="text-orange-500">#{user?.tag}</span></span>
+                     <Copy size={16} className="text-gray-400 group-hover:text-orange-500" />
                 </div>
 
                 <Button className="w-auto px-8 relative z-10 shadow-lg shadow-orange-500/30 transform hover:-translate-y-0.5 transition-transform" onClick={() => setIsModalOpen(true)}>
@@ -324,7 +348,7 @@ const Dashboard = () => {
                 </Button>
                 
                 <div className="mt-12 text-xs text-gray-400 flex items-center gap-2 justify-center relative z-10">
-                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Chiffré de bout en bout
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Connexion Sécurisée
                 </div>
             </div>
         )}

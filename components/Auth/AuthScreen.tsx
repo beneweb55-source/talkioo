@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { loginAPI, registerAPI } from '../../services/mockBackend';
+import { loginAPI, registerAPI } from '../../services/supabaseService';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { MessageCircleCode } from 'lucide-react';

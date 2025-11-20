@@ -29,25 +29,34 @@ const saveToStorage = (key: string, data: any) => {
 
 // --- DEFAULT DATA (Used only on first load) ---
 const DEFAULT_USERS: User[] = [
-  { id: 1, username: 'alice', email: 'alice@test.com', created_at: new Date().toISOString() },
-  { id: 2, username: 'bob', email: 'bob@test.com', created_at: new Date().toISOString() },
+  { id: '1', username: 'alice', tag: '1234', email: 'alice@test.com', created_at: new Date().toISOString() },
+  { id: '2', username: 'bob', tag: '5678', email: 'bob@test.com', created_at: new Date().toISOString() },
+  // Ajout explicite pour le test de l'utilisateur
+  { id: '3', username: 'raouf', tag: '9012', email: 'raouf@test.com', created_at: new Date().toISOString() }, 
 ];
 
 const DEFAULT_CONVERSATIONS: Conversation[] = [
-    { id: 1, name: 'Groupe Tech', is_group: true, created_at: new Date().toISOString() }
+    { id: '1', name: 'Groupe Tech', is_group: true, created_at: new Date().toISOString() }
 ];
 
 const DEFAULT_PARTICIPANTS: Participant[] = [
-    { user_id: 1, conversation_id: 1, joined_at: new Date().toISOString() },
-    { user_id: 2, conversation_id: 1, joined_at: new Date().toISOString() }
+    { user_id: '1', conversation_id: '1', joined_at: new Date().toISOString() },
+    { user_id: '2', conversation_id: '1', joined_at: new Date().toISOString() }
 ];
 
 const DEFAULT_MESSAGES: Message[] = [
-    { id: 1, conversation_id: 1, sender_id: 1, content: 'Bienvenue sur Talkio (version persistante)!', created_at: new Date().toISOString() }
+    { id: '1', conversation_id: '1', sender_id: '1', content: 'Bienvenue sur Talkio (version persistante)!', created_at: new Date().toISOString() }
 ];
 
 // --- STATE INITIALIZATION ---
 let USERS = loadFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
+
+// --- FIX: Ensure Raouf exists for demo purposes if local storage is old ---
+if (!USERS.find(u => u.id === '3')) {
+    USERS.push({ id: '3', username: 'raouf', tag: '9012', email: 'raouf@test.com', created_at: new Date().toISOString() });
+    saveToStorage(STORAGE_KEYS.USERS, USERS);
+}
+
 let CONVERSATIONS = loadFromStorage<Conversation[]>(STORAGE_KEYS.CONVERSATIONS, DEFAULT_CONVERSATIONS);
 let PARTICIPANTS = loadFromStorage<Participant[]>(STORAGE_KEYS.PARTICIPANTS, DEFAULT_PARTICIPANTS);
 let MESSAGES = loadFromStorage<Message[]>(STORAGE_KEYS.MESSAGES, DEFAULT_MESSAGES);
@@ -55,10 +64,10 @@ let FRIEND_REQUESTS = loadFromStorage<FriendRequest[]>(STORAGE_KEYS.FRIEND_REQUE
 
 // --- Event Emitter for Socket Simulation ---
 type SocketListener = (message: Message) => void;
-const listeners: Record<number, SocketListener[]> = {}; 
+const listeners: Record<string, SocketListener[]> = {}; 
 
 export const mockSocket = {
-  joinRoom: (conversationId: number, callback: SocketListener) => {
+  joinRoom: (conversationId: string, callback: SocketListener) => {
     if (!listeners[conversationId]) {
       listeners[conversationId] = [];
     }
@@ -67,7 +76,7 @@ export const mockSocket = {
       listeners[conversationId] = listeners[conversationId].filter(cb => cb !== callback);
     };
   },
-  emitNewMessage: (conversationId: number, message: Message) => {
+  emitNewMessage: (conversationId: string, message: Message) => {
     if (listeners[conversationId]) {
       listeners[conversationId].forEach(cb => cb(message));
     }
@@ -86,8 +95,9 @@ export const registerAPI = async (username: string, email: string, password: str
     throw new Error("Email déjà utilisé");
   }
   const newUser: User = {
-    id: USERS.length > 0 ? Math.max(...USERS.map(u => u.id)) + 1 : 1,
+    id: USERS.length > 0 ? (Math.max(...USERS.map(u => parseInt(u.id) || 0)) + 1).toString() : '1',
     username,
+    tag: Math.floor(1000 + Math.random() * 9000).toString(),
     email,
     created_at: new Date().toISOString()
   };
@@ -110,12 +120,12 @@ export const loginAPI = async (email: string, password: string): Promise<AuthRes
 };
 
 // Utilisé par AuthContext pour restaurer la session
-export const getUserByIdAPI = async (id: number): Promise<User | undefined> => {
+export const getUserByIdAPI = async (id: string): Promise<User | undefined> => {
     USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
     return USERS.find(u => u.id === id);
 }
 
-export const getConversationsAPI = async (userId: number): Promise<Conversation[]> => {
+export const getConversationsAPI = async (userId: string): Promise<Conversation[]> => {
   await new Promise(resolve => setTimeout(resolve, 400));
   
   CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, CONVERSATIONS);
@@ -141,16 +151,18 @@ export const getConversationsAPI = async (userId: number): Promise<Conversation[
 // --- FRIEND REQUEST LOGIC ---
 
 const parseTargetIdentifier = (identifier: string) => {
-    const lastHashIndex = identifier.lastIndexOf('#');
+    const cleanId = identifier.trim();
+    const lastHashIndex = cleanId.lastIndexOf('#');
     if (lastHashIndex === -1) return null;
-    const username = identifier.substring(0, lastHashIndex);
-    const idStr = identifier.substring(lastHashIndex + 1);
-    const id = parseInt(idStr);
-    if (isNaN(id)) return null;
-    return { username, id };
+    
+    const username = cleanId.substring(0, lastHashIndex).trim();
+    const idStr = cleanId.substring(lastHashIndex + 1).trim();
+    
+    if (!idStr) return null;
+    return { username, id: idStr };
 };
 
-export const sendFriendRequestAPI = async (currentUserId: number, targetIdentifier: string): Promise<boolean> => {
+export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifier: string): Promise<boolean> => {
     await new Promise(resolve => setTimeout(resolve, 600));
     
     // Refresh Data
@@ -160,10 +172,15 @@ export const sendFriendRequestAPI = async (currentUserId: number, targetIdentifi
     CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, CONVERSATIONS);
 
     const targetData = parseTargetIdentifier(targetIdentifier);
-    if (!targetData) throw new Error("Format invalide. Utilisez 'Nom#ID' (ex: alice#1)");
+    if (!targetData) throw new Error("Format invalide. Utilisez 'Nom#ID' (ex: raouf#3)");
 
     const targetUser = USERS.find(u => u.id === targetData.id && u.username.toLowerCase() === targetData.username.toLowerCase());
-    if (!targetUser) throw new Error("Utilisateur introuvable.");
+    
+    if (!targetUser) {
+        // Message d'erreur plus explicatif pour la démo
+        throw new Error(`Utilisateur '${targetData.username}#${targetData.id}' introuvable. (Note: Ceci est une démo locale, vous ne pouvez voir que les utilisateurs créés dans CE navigateur)`);
+    }
+    
     if (targetUser.id === currentUserId) throw new Error("Vous ne pouvez pas vous ajouter vous-même.");
 
     const existingReq = FRIEND_REQUESTS.find(
@@ -185,7 +202,7 @@ export const sendFriendRequestAPI = async (currentUserId: number, targetIdentifi
     if (existingConv) throw new Error("Une conversation existe déjà.");
 
     const newRequest: FriendRequest = {
-        id: FRIEND_REQUESTS.length > 0 ? Math.max(...FRIEND_REQUESTS.map(r => r.id)) + 1 : 1,
+        id: FRIEND_REQUESTS.length > 0 ? (Math.max(...FRIEND_REQUESTS.map(r => parseInt(r.id) || 0)) + 1).toString() : '1',
         sender_id: currentUserId,
         receiver_id: targetUser.id,
         status: 'pending',
@@ -197,7 +214,7 @@ export const sendFriendRequestAPI = async (currentUserId: number, targetIdentifi
     return true;
 };
 
-export const getIncomingFriendRequestsAPI = async (userId: number): Promise<FriendRequest[]> => {
+export const getIncomingFriendRequestsAPI = async (userId: string): Promise<FriendRequest[]> => {
     await new Promise(resolve => setTimeout(resolve, 300));
     FRIEND_REQUESTS = loadFromStorage(STORAGE_KEYS.FRIEND_REQUESTS, FRIEND_REQUESTS);
     USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
@@ -210,7 +227,7 @@ export const getIncomingFriendRequestsAPI = async (userId: number): Promise<Frie
     }));
 };
 
-export const respondToFriendRequestAPI = async (requestId: number, status: 'accepted' | 'rejected'): Promise<Conversation | null> => {
+export const respondToFriendRequestAPI = async (requestId: string, status: 'accepted' | 'rejected'): Promise<Conversation | null> => {
     await new Promise(resolve => setTimeout(resolve, 500));
     
     FRIEND_REQUESTS = loadFromStorage(STORAGE_KEYS.FRIEND_REQUESTS, FRIEND_REQUESTS);
@@ -229,12 +246,12 @@ export const respondToFriendRequestAPI = async (requestId: number, status: 'acce
     return null;
 };
 
-const createConversationInternal = async (user1Id: number, user2Id: number): Promise<Conversation> => {
+const createConversationInternal = async (user1Id: string, user2Id: string): Promise<Conversation> => {
     CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, CONVERSATIONS);
     PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
     MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
 
-    const newId = CONVERSATIONS.length > 0 ? Math.max(...CONVERSATIONS.map(c => c.id)) + 1 : 1;
+    const newId = CONVERSATIONS.length > 0 ? (Math.max(...CONVERSATIONS.map(c => parseInt(c.id) || 0)) + 1).toString() : '1';
     const newConv: Conversation = {
         id: newId,
         name: null,
@@ -248,8 +265,8 @@ const createConversationInternal = async (user1Id: number, user2Id: number): Pro
     PARTICIPANTS.push({ user_id: user1Id, conversation_id: newId, joined_at: new Date().toISOString() });
     PARTICIPANTS.push({ user_id: user2Id, conversation_id: newId, joined_at: new Date().toISOString() });
     
-    const sysMsg = {
-        id: MESSAGES.length > 0 ? Math.max(...MESSAGES.map(m => m.id)) + 1 : 1,
+    const sysMsg: Message = {
+        id: MESSAGES.length > 0 ? (Math.max(...MESSAGES.map(m => parseInt(m.id) || 0)) + 1).toString() : '1',
         conversation_id: newId,
         sender_id: user1Id,
         content: "👋 Discussion démarrée via demande d'ami.",
@@ -264,11 +281,11 @@ const createConversationInternal = async (user1Id: number, user2Id: number): Pro
     return newConv;
 };
 
-export const createConversationAPI = async (currentUserId: number, targetIdentifier: string): Promise<Conversation> => {
+export const createConversationAPI = async (currentUserId: string, targetIdentifier: string): Promise<Conversation> => {
      throw new Error("Veuillez utiliser la demande d'ami pour discuter avec quelqu'un.");
 };
 
-export const deleteConversationAPI = async (conversationId: number): Promise<boolean> => {
+export const deleteConversationAPI = async (conversationId: string): Promise<boolean> => {
     await new Promise(resolve => setTimeout(resolve, 500));
     
     CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, CONVERSATIONS);
@@ -286,7 +303,7 @@ export const deleteConversationAPI = async (conversationId: number): Promise<boo
     return true;
 };
 
-export const getMessagesAPI = async (conversationId: number): Promise<Message[]> => {
+export const getMessagesAPI = async (conversationId: string): Promise<Message[]> => {
   await new Promise(resolve => setTimeout(resolve, 300));
   MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
   USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
@@ -295,25 +312,25 @@ export const getMessagesAPI = async (conversationId: number): Promise<Message[]>
     .filter(m => m.conversation_id === conversationId)
     .map(m => {
         const sender = USERS.find(u => u.id === m.sender_id);
-        return { ...m, sender_username: sender ? `${sender.username}#${sender.id}` : 'Inconnu' };
+        return { ...m, sender_username: sender ? `${sender.username}#${sender.tag || sender.id}` : 'Inconnu' };
     })
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   return messages;
 };
 
-export const sendMessageAPI = async (conversationId: number, userId: number, content: string): Promise<Message> => {
+export const sendMessageAPI = async (conversationId: string, userId: string, content: string): Promise<Message> => {
   await new Promise(resolve => setTimeout(resolve, 200)); 
   MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
   USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
 
   const sender = USERS.find(u => u.id === userId);
   const newMessage: Message = {
-    id: MESSAGES.length > 0 ? Math.max(...MESSAGES.map(m => m.id)) + 1 : 1,
+    id: MESSAGES.length > 0 ? (Math.max(...MESSAGES.map(m => parseInt(m.id) || 0)) + 1).toString() : '1',
     conversation_id: conversationId,
     sender_id: userId,
     content,
     created_at: new Date().toISOString(),
-    sender_username: sender ? `${sender.username}#${sender.id}` : 'Inconnu'
+    sender_username: sender ? `${sender.username}#${sender.tag || sender.id}` : 'Inconnu'
   };
   
   MESSAGES.push(newMessage);
@@ -324,7 +341,7 @@ export const sendMessageAPI = async (conversationId: number, userId: number, con
   return newMessage;
 };
 
-export const getOtherParticipant = (conversationId: number, currentUserId: number): User | undefined => {
+export const getOtherParticipant = (conversationId: string, currentUserId: string): User | undefined => {
     PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
     USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
 

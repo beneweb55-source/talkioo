@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
-import { getUserByIdAPI } from '../services/mockBackend';
+import { getUserByIdAPI } from '../services/supabaseService';
+import { supabase } from '../services/supabaseClient';
 
 interface AuthContextType {
   user: User | null;
@@ -18,42 +19,41 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-      const restoreSession = async () => {
-          const storedToken = localStorage.getItem('talkio_token');
-          const storedUserId = localStorage.getItem('talkio_user_id');
+      const checkSession = async () => {
+          if (!supabase) {
+              setIsLoading(false);
+              return;
+          }
 
-          if (storedToken && storedUserId) {
+          const { data: { session } } = await supabase.auth.getSession();
+
+          if (session?.user) {
               try {
-                  const userData = await getUserByIdAPI(parseInt(storedUserId));
+                  const userData = await getUserByIdAPI(session.user.id);
                   if (userData) {
                       setUser(userData);
-                      setToken(storedToken);
-                  } else {
-                      // Invalid stored data
-                      logout();
+                      setToken(session.access_token);
                   }
               } catch (e) {
-                  logout();
+                  console.error("Session load error", e);
+                  await supabase.auth.signOut();
               }
           }
           setIsLoading(false);
       };
 
-      restoreSession();
+      checkSession();
   }, []);
 
   const login = (userData: User, authToken: string) => {
     setUser(userData);
     setToken(authToken);
-    localStorage.setItem('talkio_token', authToken);
-    localStorage.setItem('talkio_user_id', userData.id.toString());
   };
 
-  const logout = () => {
+  const logout = async () => {
+    if(supabase) await supabase.auth.signOut();
     setUser(null);
     setToken(null);
-    localStorage.removeItem('talkio_token');
-    localStorage.removeItem('talkio_user_id');
   };
 
   return (

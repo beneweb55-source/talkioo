@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, mockSocket, getOtherParticipant } from '../../services/mockBackend';
+import { getMessagesAPI, sendMessageAPI, subscribeToMessages, getOtherParticipant } from '../../services/supabaseService';
 import { MessageBubble } from './MessageBubble';
 import { Send, MoreVertical, Phone, Video, ArrowLeft } from 'lucide-react';
 
@@ -14,13 +14,27 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
+  const [headerName, setHeaderName] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Load initial history
+  // Load Name
+  useEffect(() => {
+      const loadName = async () => {
+        if (conversation.is_group) {
+            setHeaderName(conversation.name || 'Groupe');
+        } else {
+            const other = await getOtherParticipant(conversation.id, currentUser.id);
+            setHeaderName(other ? `${other.username}#${other.tag}` : 'Inconnu');
+        }
+      };
+      loadName();
+  }, [conversation, currentUser]);
+
+  // Load history + Subscribe Realtime
   useEffect(() => {
     setLoading(true);
     getMessagesAPI(conversation.id).then(data => {
@@ -28,17 +42,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       setLoading(false);
       setTimeout(scrollToBottom, 100);
     });
-  }, [conversation.id]);
 
-  // Setup Socket Listener for this room
-  useEffect(() => {
-    const cleanup = mockSocket.joinRoom(conversation.id, (newMessage) => {
-      console.log('Received real-time message:', newMessage);
-      setMessages(prev => [...prev, newMessage]);
-      setTimeout(scrollToBottom, 100);
+    const unsubscribe = subscribeToMessages(conversation.id, (newMessage) => {
+        setMessages(prev => {
+            // Avoid duplicates
+            if (prev.find(m => m.id === newMessage.id)) return prev;
+            return [...prev, newMessage];
+        });
+        setTimeout(scrollToBottom, 100);
     });
 
-    return cleanup;
+    return () => {
+        unsubscribe();
+    };
   }, [conversation.id]);
 
   const handleSend = async (e: React.FormEvent) => {
@@ -46,22 +62,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     if (!inputText.trim()) return;
 
     const text = inputText;
-    setInputText(''); // Optimistic clear
+    setInputText(''); 
 
     try {
-      // Server handles DB insert + Socket emit
       await sendMessageAPI(conversation.id, currentUser.id, text);
+      // Note: We don't manually add to state here, we wait for the Realtime subscription 
+      // to confirm the message was inserted. This ensures consistency.
     } catch (err) {
       console.error("Failed to send", err);
-      // Restore text on error
       setInputText(text);
+      alert("Erreur d'envoi");
     }
-  };
-
-  const getHeaderTitle = () => {
-    if (conversation.is_group) return conversation.name;
-    const other = getOtherParticipant(conversation.id, currentUser.id);
-    return other ? `${other.username}#${other.id}` : 'Inconnu';
   };
 
   return (
@@ -75,10 +86,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     </button>
                 )}
                 <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-white flex items-center justify-center font-bold shadow-sm">
-                    {getHeaderTitle()?.charAt(0).toUpperCase()}
+                    {headerName?.charAt(0).toUpperCase() || '?'}
                 </div>
                 <div>
-                    <h2 className="text-gray-800 font-semibold text-base leading-tight">{getHeaderTitle()}</h2>
+                    <h2 className="text-gray-800 font-semibold text-base leading-tight">{headerName}</h2>
                     <div className="flex items-center gap-1">
                         <span className="block w-2 h-2 rounded-full bg-green-500"></span>
                         <p className="text-xs text-gray-500 font-medium">{conversation.is_group ? 'Membres' : 'En ligne'}</p>

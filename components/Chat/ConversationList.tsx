@@ -1,14 +1,14 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Conversation, User } from '../../types';
-import { getOtherParticipant } from '../../services/mockBackend';
+import { getOtherParticipant } from '../../services/supabaseService';
 import { Users, User as UserIcon, Trash2 } from 'lucide-react';
 
 interface ConversationListProps {
   conversations: Conversation[];
-  activeId: number | null;
+  activeId: string | null;
   currentUser: User;
-  onSelect: (id: number) => void;
-  onDelete: (id: number) => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
 }
 
 export const ConversationList: React.FC<ConversationListProps> = ({ 
@@ -19,19 +19,6 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   currentUser
 }) => {
   
-  const getConversationName = (conv: Conversation) => {
-    if (conv.is_group) return conv.name;
-    const other = getOtherParticipant(conv.id, currentUser.id);
-    return other ? `${other.username}#${other.id}` : 'Utilisateur Inconnu';
-  };
-
-  const handleDelete = (e: React.MouseEvent, id: number) => {
-      e.stopPropagation();
-      if(window.confirm("Voulez-vous vraiment supprimer cette conversation ?")) {
-          onDelete(id);
-      }
-  }
-
   return (
     <div className="flex-1 overflow-y-auto no-scrollbar">
       {conversations.length === 0 && (
@@ -39,13 +26,44 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               Aucune conversation. Cliquez sur le bouton + pour commencer.
           </div>
       )}
-      {conversations.map((conv) => {
-        const isActive = activeId === conv.id;
-        const name = getConversationName(conv);
-        
-        return (
-          <div
-            key={conv.id}
+      {conversations.map((conv) => (
+        <ConversationItem 
+            key={conv.id} 
+            conv={conv} 
+            currentUser={currentUser} 
+            isActive={activeId === conv.id} 
+            onSelect={onSelect} 
+            onDelete={onDelete} 
+        />
+      ))}
+    </div>
+  );
+};
+
+const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete }: any) => {
+    const [name, setName] = useState(conv.name || 'Chargement...');
+
+    useEffect(() => {
+        const fetchName = async () => {
+            if (conv.is_group) {
+                setName(conv.name);
+            } else {
+                const other = await getOtherParticipant(conv.id, currentUser.id);
+                setName(other ? `${other.username}#${other.tag}` : 'Utilisateur Inconnu');
+            }
+        };
+        fetchName();
+    }, [conv, currentUser]);
+
+    const handleDelete = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if(window.confirm("Voulez-vous vraiment supprimer cette conversation ?")) {
+            onDelete(conv.id);
+        }
+    }
+
+    return (
+        <div
             onClick={() => onSelect(conv.id)}
             className={`w-full px-4 py-3 flex items-center cursor-pointer transition-all border-b border-gray-50 group ${
               isActive ? 'bg-orange-50' : 'hover:bg-gray-50 bg-white'
@@ -69,7 +87,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     {conv.last_message}
                 </p>
                 <button 
-                    onClick={(e) => handleDelete(e, conv.id)}
+                    onClick={handleDelete}
                     className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
                     title="Supprimer"
                 >
@@ -78,8 +96,5 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               </div>
             </div>
           </div>
-        );
-      })}
-    </div>
-  );
-};
+    )
+}

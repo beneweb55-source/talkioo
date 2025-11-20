@@ -33,3 +33,12 @@ export interface AuthResponse {
   user: User;
   token: string;
 }
+
+export interface FriendRequest {
+  id: number;
+  sender_id: number;
+  receiver_id: number;
+  status: 'pending' | 'accepted' | 'rejected';
+  created_at: string;
+  sender?: User; // Hydrated for UI
+}

@@ -20,29 +20,36 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
       const checkSession = async () => {
-          if (!supabase) {
-              setIsLoading(false);
-              return;
-          }
-
-          const { data: { session } } = await supabase.auth.getSession();
-
-          if (session?.user) {
-              try {
+          try {
+              const { data: { session } } = await supabase.auth.getSession();
+              
+              if (session?.user) {
+                  // Récupérer le profil utilisateur complet (avec username/tag)
                   const userData = await getUserByIdAPI(session.user.id);
                   if (userData) {
                       setUser(userData);
                       setToken(session.access_token);
                   }
-              } catch (e) {
-                  console.error("Session load error", e);
-                  await supabase.auth.signOut();
               }
+          } catch (e) {
+              console.error("Erreur de session Supabase:", e);
+          } finally {
+              setIsLoading(false);
           }
-          setIsLoading(false);
       };
 
       checkSession();
+
+      // Écouter les changements d'état (ex: déconnexion depuis un autre onglet)
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+          if (!session) {
+              setUser(null);
+              setToken(null);
+              setIsLoading(false);
+          }
+      });
+
+      return () => subscription.unsubscribe();
   }, []);
 
   const login = (userData: User, authToken: string) => {
@@ -51,7 +58,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const logout = async () => {
-    if(supabase) await supabase.auth.signOut();
+    await supabase.auth.signOut();
     setUser(null);
     setToken(null);
   };

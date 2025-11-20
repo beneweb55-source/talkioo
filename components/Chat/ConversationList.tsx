@@ -60,41 +60,41 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete }: a
         if(window.confirm("Voulez-vous vraiment supprimer cette conversation ?")) {
             onDelete(conv.id);
         }
-    }
+    };
 
     return (
-        <div
+        <div 
             onClick={() => onSelect(conv.id)}
-            className={`w-full px-4 py-3 flex items-center cursor-pointer transition-all border-b border-gray-50 group ${
-              isActive ? 'bg-orange-50' : 'hover:bg-gray-50 bg-white'
-            }`}
-          >
-            <div className={`flex-shrink-0 h-12 w-12 rounded-full flex items-center justify-center text-white shadow-sm ${conv.is_group ? 'bg-indigo-500' : 'bg-orange-200 text-orange-600'}`}>
-               {conv.is_group ? <Users size={20} /> : <UserIcon size={20} />}
+            className={`
+                px-4 py-3 cursor-pointer transition-colors flex items-center justify-between group
+                ${isActive ? 'bg-orange-50 border-r-4 border-orange-500' : 'hover:bg-gray-50 border-r-4 border-transparent'}
+            `}
+        >
+            <div className="flex items-center gap-3 overflow-hidden">
+                <div className={`
+                    h-12 w-12 rounded-full flex items-center justify-center text-lg font-semibold flex-shrink-0
+                    ${isActive ? 'bg-orange-200 text-orange-800' : 'bg-gray-200 text-gray-600'}
+                `}>
+                    {conv.is_group ? <Users size={20} /> : name.charAt(0).toUpperCase()}
+                </div>
+                <div className="flex flex-col overflow-hidden">
+                    <span className={`font-medium text-sm truncate ${isActive ? 'text-gray-900' : 'text-gray-700'}`}>
+                        {name}
+                    </span>
+                    <span className="text-xs text-gray-500 truncate max-w-[180px]">
+                        {conv.last_message}
+                    </span>
+                </div>
             </div>
             
-            <div className="ml-3 flex-1 min-w-0">
-              <div className="flex justify-between items-center mb-1">
-                <h3 className={`text-sm font-semibold truncate ${isActive ? 'text-orange-900' : 'text-gray-800'}`}>
-                  {name}
-                </h3>
-                <span className="text-xs text-gray-400">
-                  {conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}
+            <div className="flex flex-col items-end gap-2">
+                <span className="text-[10px] text-gray-400">
+                    {new Date(conv.last_message_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                 </span>
-              </div>
-              <div className="flex justify-between items-center">
-                <p className={`text-sm truncate max-w-[80%] ${isActive ? 'text-orange-700' : 'text-gray-500'}`}>
-                    {conv.last_message}
-                </p>
-                <button 
-                    onClick={handleDelete}
-                    className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
-                    title="Supprimer"
-                >
+                <button onClick={handleDelete} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Trash2 size={14} />
                 </button>
-              </div>
             </div>
-          </div>
-    )
-}
+        </div>
+    );
+};

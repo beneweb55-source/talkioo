@@ -66,8 +66,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
     try {
       await sendMessageAPI(conversation.id, currentUser.id, text);
-      // Note: We don't manually add to state here, we wait for the Realtime subscription 
-      // to confirm the message was inserted. This ensures consistency.
+      // Realtime will handle the display update
     } catch (err) {
       console.error("Failed to send", err);
       setInputText(text);
@@ -76,7 +75,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#efeae2] relative">
+    <div className="flex flex-col h-full bg-[#e5ddd5] relative">
         {/* Header */}
         <div className="h-16 bg-white/90 backdrop-blur-md border-b border-gray-200 flex items-center justify-between px-4 shadow-sm z-10">
             <div className="flex items-center gap-3">
@@ -85,7 +84,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         <ArrowLeft size={20} />
                     </button>
                 )}
-                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-white flex items-center justify-center font-bold shadow-sm">
+                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-500 to-orange-700 text-white flex items-center justify-center font-bold shadow-sm">
                     {headerName?.charAt(0).toUpperCase() || '?'}
                 </div>
                 <div>
@@ -96,7 +95,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     </div>
                 </div>
             </div>
-            <div className="flex items-center gap-4 text-orange-600">
+            <div className="flex items-center gap-4 text-orange-700">
                 <Video className="cursor-pointer hover:bg-orange-50 p-2 rounded-full box-content transition-colors" size={20} />
                 <Phone className="cursor-pointer hover:bg-orange-50 p-2 rounded-full box-content transition-colors" size={20} />
                 <MoreVertical className="cursor-pointer hover:bg-orange-50 p-2 rounded-full box-content transition-colors" size={20} />

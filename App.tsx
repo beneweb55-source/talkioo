@@ -12,7 +12,7 @@ import {
   respondToFriendRequestAPI,
   subscribeToFriendRequests
 } from './services/supabaseService';
-import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, CheckCheck, LogOut, X, Copy } from 'lucide-react';
+import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy, Database } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 
@@ -46,7 +46,7 @@ const Dashboard = () => {
       const reqs = await getIncomingFriendRequestsAPI(user.id);
       setFriendRequests(reqs);
       
-      // Update badge count if it differs (mostly for initial load)
+      // Update badge count
       const pendingCount = reqs.filter(r => r.status === 'pending').length;
       setUnreadNotifsCount(pendingCount);
   };
@@ -64,18 +64,12 @@ const Dashboard = () => {
 
     // Subscribe to NEW Friend Requests (Realtime)
     const unsubscribeRequests = subscribeToFriendRequests(user.id, () => {
-        // When a new request comes in via WebSocket:
-        fetchRequests(); // Refresh the list
-        // Trigger a browser notification or sound here if desired
+        fetchRequests();
+        // Note: On pourrait aussi recharger les conversations si une requête a été acceptée ailleurs
     });
-
-    // Poll conversations less aggressively (every 10s) just in case new chats appear
-    // (Ideally we would subscribe to 'participants' table changes too)
-    const interval = setInterval(fetchConversations, 10000);
 
     return () => {
         unsubscribeRequests();
-        clearInterval(interval);
     };
   }, [user]);
 
@@ -92,7 +86,6 @@ const Dashboard = () => {
         setModalSuccess(`Demande envoyée à ${newChatTarget} !`);
         setNewChatTarget('');
         
-        // Close modal after short delay
         setTimeout(() => {
             setIsModalOpen(false);
             setModalSuccess('');
@@ -113,13 +106,13 @@ const Dashboard = () => {
         const newConv = await respondToFriendRequestAPI(requestId, status);
         
         if (status === 'accepted' && newConv) {
-            await fetchConversations(); // Refresh list to show new chat
-            setActiveConversationId(newConv.id); // Open it
+            await fetchConversations(); 
+            setActiveConversationId(newConv.id);
             setShowNotifications(false);
         }
       } catch (err) {
           console.error("Erreur lors de la réponse à la demande", err);
-          fetchRequests(); // Revert on error
+          fetchRequests(); // Revert
       }
   };
 
@@ -132,8 +125,7 @@ const Dashboard = () => {
   };
 
   const copyToClipboard = () => {
-      navigator.clipboard.writeText(`${user?.username}#${user?.tag}`);
-      // Visual feedback could be added here
+      if(user) navigator.clipboard.writeText(`${user.username}#${user.tag}`);
   };
 
   const activeConversation = conversations.find(c => c.id === activeConversationId);
@@ -160,13 +152,13 @@ const Dashboard = () => {
                 </div>
                 
                 <p className="text-sm text-gray-500 mb-6">
-                   Entrez l'identifiant unique <b>Nom#1234</b>. Si la personne accepte, une conversation s'ouvrira.
+                   Entrez l'identifiant unique <b>Nom#1234</b>.
                 </p>
                 
                 <form onSubmit={handleSendFriendRequest}>
                     <Input 
                         label="Identifiant Talkio"
-                        placeholder="ex: Alice#9402"
+                        placeholder="ex: Alice#1234"
                         value={newChatTarget}
                         onChange={(e) => setNewChatTarget(e.target.value)}
                         autoFocus
@@ -189,7 +181,7 @@ const Dashboard = () => {
                         <Button type="button" variant="secondary" className="w-auto" onClick={() => setIsModalOpen(false)} disabled={modalLoading}>
                             Annuler
                         </Button>
-                        <Button type="submit" className="w-auto" isLoading={modalLoading} disabled={!newChatTarget.trim() || !!modalSuccess}>
+                        <Button type="submit" className="w-auto bg-orange-600 hover:bg-orange-700 focus:ring-orange-500" isLoading={modalLoading} disabled={!newChatTarget.trim() || !!modalSuccess}>
                             Envoyer demande
                         </Button>
                     </div>
@@ -203,7 +195,7 @@ const Dashboard = () => {
         {/* Sidebar Header */}
         <div className="h-16 bg-white flex items-center justify-between px-4 border-b border-gray-100 shrink-0 relative z-30">
            <div className="flex items-center gap-3 overflow-hidden group cursor-pointer" onClick={copyToClipboard} title="Cliquez pour copier votre ID">
-             <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-100 to-orange-200 border border-orange-200 flex items-center justify-center text-orange-600 font-bold flex-shrink-0 shadow-sm">
+             <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-100 to-orange-200 border border-orange-200 flex items-center justify-center text-orange-700 font-bold flex-shrink-0 shadow-sm">
                {user?.username.charAt(0).toUpperCase()}
              </div>
              <div className="flex flex-col overflow-hidden">
@@ -265,7 +257,7 @@ const Dashboard = () => {
                                               </button>
                                               <button 
                                                 onClick={() => handleRespondToRequest(req.id, 'accepted')}
-                                                className="p-1.5 bg-orange-100 text-orange-600 rounded-full hover:bg-orange-200 transition-colors shadow-sm"
+                                                className="p-1.5 bg-green-100 text-green-600 rounded-full hover:bg-green-200 transition-colors shadow-sm"
                                                 title="Accepter"
                                               >
                                                   <Check size={16} />
@@ -314,7 +306,7 @@ const Dashboard = () => {
       </div>
 
       {/* Main Chat Area */}
-      <div className={`${!activeConversationId ? 'hidden md:flex' : 'flex'} flex-1 flex-col bg-[#f8f9fa] h-full relative`}>
+      <div className={`${!activeConversationId ? 'hidden md:flex' : 'flex'} flex-1 flex-col bg-[#f3f4f6] h-full relative`}>
         {activeConversation ? (
             <ChatWindow 
                 conversation={activeConversation} 
@@ -323,32 +315,31 @@ const Dashboard = () => {
             />
         ) : (
             <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 text-gray-500 p-6 text-center relative overflow-hidden select-none">
-                <div className="absolute inset-0 opacity-5 bg-[radial-gradient(#f97316_1px,transparent_1px)] [background-size:16px_16px]"></div>
                 
                 <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center mb-8 shadow-xl shadow-orange-100 relative z-10 border border-orange-50 animate-in zoom-in duration-500">
-                    <MessageCircleCode className="text-orange-500" size={64} />
+                    <Database className="text-orange-600" size={64} />
                 </div>
-                <h1 className="text-4xl font-bold text-gray-800 mb-4 relative z-10 tracking-tight">Talkio <span className="text-orange-600">Connect</span></h1>
+                <h1 className="text-4xl font-bold text-gray-800 mb-4 relative z-10 tracking-tight">Talkio <span className="text-orange-600">Cloud</span></h1>
                 <p className="text-base max-w-md text-center mb-8 text-gray-600 leading-relaxed relative z-10">
-                    Connecté au Cloud Supabase.<br/>
-                    <span className="text-sm mt-2 block">Partagez votre ID unique :</span>
+                    Connecté à Supabase (PostgreSQL). <br/>
+                    Données synchronisées en temps réel via le cloud.
                 </p>
                 
                 <div 
                     className="relative z-10 bg-white px-6 py-3 rounded-full shadow-md border border-gray-200 flex items-center gap-3 mb-8 group cursor-pointer hover:border-orange-300 transition-colors transform hover:scale-105 active:scale-95 duration-200" 
                     onClick={copyToClipboard}
                 >
-                     <span className="font-mono text-lg font-bold text-gray-800 tracking-wide">{user?.username}<span className="text-orange-500">#{user?.tag}</span></span>
-                     <Copy size={16} className="text-gray-400 group-hover:text-orange-500" />
+                     <span className="font-mono text-lg font-bold text-gray-800 tracking-wide">{user?.username}<span className="text-orange-600">#{user?.tag}</span></span>
+                     <Copy size={16} className="text-gray-400 group-hover:text-orange-600" />
                 </div>
 
-                <Button className="w-auto px-8 relative z-10 shadow-lg shadow-orange-500/30 transform hover:-translate-y-0.5 transition-transform" onClick={() => setIsModalOpen(true)}>
+                <Button variant="primary" className="w-auto px-8 relative z-10 bg-orange-600 hover:bg-orange-700" onClick={() => setIsModalOpen(true)}>
                     <UserPlus size={18} className="mr-2 inline" />
                     Ajouter un ami
                 </Button>
                 
                 <div className="mt-12 text-xs text-gray-400 flex items-center gap-2 justify-center relative z-10">
-                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Connexion Sécurisée
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Online & Secure
                 </div>
             </div>
         )}

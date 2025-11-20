@@ -89,7 +89,7 @@ export const AuthScreen: React.FC = () => {
             )}
 
             <div className="pt-4">
-              <Button type="submit" isLoading={loading}>
+              <Button type="submit" isLoading={loading} className="bg-orange-600 hover:bg-orange-700 focus:ring-orange-500">
                 {isLogin ? 'Se connecter' : "S'inscrire"}
               </Button>
             </div>

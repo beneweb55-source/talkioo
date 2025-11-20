@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant } from '../../services/mockBackend';
+import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
 import { Send, MoreVertical, Phone, Video, ArrowLeft, X } from 'lucide-react';
 

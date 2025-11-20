@@ -6,7 +6,6 @@ import { User, Conversation, Message, AuthResponse, FriendRequest } from '../typ
 export const registerAPI = async (username: string, email: string, password: string): Promise<AuthResponse> => {
     if (!supabase) throw new Error("Supabase non configuré");
 
-    // 1. Créer l'auth user
     const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
@@ -15,17 +14,17 @@ export const registerAPI = async (username: string, email: string, password: str
     if (authError) throw authError;
     if (!authData.user) throw new Error("Erreur lors de la création du compte");
 
-    // 2. Créer le profil public
-    // On génère un TAG aléatoire de 4 chiffres
+    // Génération Tag
     const tag = Math.floor(1000 + Math.random() * 9000).toString();
     
-    // On insère dans la table profiles. Si un trigger SQL existe déjà, cela peut renvoyer une erreur de duplication qu'on ignore.
+    // Insertion Profil
     const { error: profileError } = await supabase
         .from('profiles')
         .insert([{ id: authData.user.id, username, tag, email }]);
 
     if (profileError) {
-        console.warn("Profile insert warning (might be handled by trigger):", profileError);
+        // Ignore si déjà créé par un trigger SQL, sinon log
+        console.warn("Profile creation:", profileError);
     }
 
     const user: User = {
@@ -50,7 +49,6 @@ export const loginAPI = async (email: string, password: string): Promise<AuthRes
     if (error) throw error;
     if (!data.user) throw new Error("Pas d'utilisateur");
 
-    // Récupérer le profil
     const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('*')
@@ -76,17 +74,20 @@ export const getUserByIdAPI = async (id: string): Promise<User | undefined> => {
 export const getConversationsAPI = async (userId: string): Promise<Conversation[]> => {
     if (!supabase) return [];
 
-    // 1. Trouver toutes les conversations où l'utilisateur est
+    // 1. Récupérer les IDs de conversation via la table participants
     const { data: participations } = await supabase
         .from('participants')
-        .select('conversation_id')
+        .select('conversation_id, last_deleted_at')
         .eq('user_id', userId);
 
     if (!participations || participations.length === 0) return [];
 
-    const convIds = participations.map(p => p.conversation_id);
+    // Filtrer celles qui ne sont pas "soft deleted" (supprimées localement)
+    // Sauf si un nouveau message est arrivé après la suppression (logique complexe pour MVP, on simplifie ici)
+    const activeParticipations = participations; 
+    const convIds = activeParticipations.map(p => p.conversation_id);
 
-    // 2. Charger les infos des conversations
+    // 2. Charger les conversations
     const { data: conversations } = await supabase
         .from('conversations')
         .select('*')
@@ -95,26 +96,67 @@ export const getConversationsAPI = async (userId: string): Promise<Conversation[
         
     if (!conversations) return [];
 
-    // 3. Récupérer le dernier message pour chaque conversation (pour l'UI de la liste)
-    // Note: En prod, on ferait une View SQL ou une fonction RPC pour éviter le N+1, mais ok pour MVP.
+    // 3. Récupérer dernier message
     const conversationsWithMsg = await Promise.all(conversations.map(async (c) => {
         const { data: msgs } = await supabase
             .from('messages')
-            .select('content, created_at')
+            .select('content, created_at, deleted_at')
             .eq('conversation_id', c.id)
             .order('created_at', { ascending: false })
             .limit(1);
+        
+        const lastMsg = msgs?.[0];
+        let preview = "Nouvelle discussion";
+        let time = c.created_at;
+
+        if (lastMsg) {
+            preview = lastMsg.deleted_at ? "🚫 Message supprimé" : lastMsg.content;
+            time = lastMsg.created_at;
+        }
+
+        // Gestion Soft Delete : Si l'utilisateur a supprimé la conv APRES le dernier message, on ne l'affiche pas
+        const myPart = activeParticipations.find(p => p.conversation_id === c.id);
+        if (myPart?.last_deleted_at && new Date(myPart.last_deleted_at) > new Date(time)) {
+            return null; 
+        }
             
         return {
             ...c,
-            last_message: msgs?.[0]?.content || "Nouvelle discussion",
-            last_message_at: msgs?.[0]?.created_at || c.created_at
+            last_message: preview,
+            last_message_at: time
         };
     }));
 
-    return conversationsWithMsg.sort((a, b) => 
-        new Date(b.last_message_at!).getTime() - new Date(a.last_message_at!).getTime()
-    );
+    return conversationsWithMsg.filter(Boolean).sort((a: any, b: any) => 
+        new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
+    ) as Conversation[];
+};
+
+export const deleteConversationAPI = async (conversationId: string, userId: string): Promise<boolean> => {
+    // Soft Delete : On met à jour last_deleted_at dans la table participants
+    const { error } = await supabase
+        .from('participants')
+        .update({ last_deleted_at: new Date().toISOString() })
+        .eq('conversation_id', conversationId)
+        .eq('user_id', userId);
+
+    return !error;
+};
+
+export const getOtherParticipant = async (conversationId: string, currentUserId: string): Promise<User | undefined> => {
+    if (!supabase) return undefined;
+    
+    const { data } = await supabase
+        .from('participants')
+        .select('user_id')
+        .eq('conversation_id', conversationId)
+        .neq('user_id', currentUserId)
+        .single();
+        
+    if (data) {
+        return await getUserByIdAPI(data.user_id);
+    }
+    return undefined;
 };
 
 // --- MESSAGES ---
@@ -142,6 +184,7 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
 export const sendMessageAPI = async (conversationId: string, userId: string, content: string): Promise<Message> => {
     if (!supabase) throw new Error("No Connection");
 
+    // Insérer le message
     const { data, error } = await supabase
         .from('messages')
         .insert([{ conversation_id: conversationId, sender_id: userId, content }])
@@ -150,7 +193,12 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
 
     if (error) throw error;
     
-    // On récupère l'info du sender pour l'affichage immédiat
+    // Réactiver la conversation pour tous les participants (reset last_deleted_at)
+    await supabase
+        .from('participants')
+        .update({ last_deleted_at: null })
+        .eq('conversation_id', conversationId);
+
     const sender = await getUserByIdAPI(userId);
 
     return {
@@ -159,32 +207,50 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
     };
 };
 
+export const editMessageAPI = async (messageId: string, newContent: string): Promise<Message> => {
+    const { data, error } = await supabase
+        .from('messages')
+        .update({ content: newContent, updated_at: new Date().toISOString() })
+        .eq('id', messageId)
+        .select()
+        .single();
+
+    if (error) throw error;
+    return data as Message;
+};
+
+export const deleteMessageAPI = async (messageId: string): Promise<boolean> => {
+    const { error } = await supabase
+        .from('messages')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', messageId);
+    
+    return !error;
+};
+
 // --- FRIEND REQUESTS ---
 
 export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifier: string): Promise<boolean> => {
     if (!supabase) return false;
 
-    // Parsing de "Nom#1234"
     const parts = targetIdentifier.split('#');
     if (parts.length !== 2) throw new Error("Format attendu : Nom#1234");
     
     const usernameTarget = parts[0].trim();
     const tagTarget = parts[1].trim();
 
-    if (!usernameTarget || !tagTarget) throw new Error("Format invalide.");
-
-    // Recherche du profil cible (Insensible à la casse pour le username grâce à ilike)
+    // Trouver le user cible
     const { data: targetUser, error: userError } = await supabase
         .from('profiles')
-        .select('id, username, tag')
-        .ilike('username', usernameTarget) // ilike = insensitive like
+        .select('id')
+        .ilike('username', usernameTarget)
         .eq('tag', tagTarget)
         .single();
 
     if (userError || !targetUser) throw new Error(`Utilisateur "${usernameTarget}#${tagTarget}" introuvable.`);
     if (targetUser.id === currentUserId) throw new Error("Vous ne pouvez pas vous ajouter vous-même.");
 
-    // Vérifier s'il y a déjà une relation ou une demande
+    // Vérifier relation existante
     const { data: existing } = await supabase
         .from('friend_requests')
         .select('*')
@@ -194,14 +260,15 @@ export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifi
          const pending = existing.find(r => r.status === 'pending');
          const accepted = existing.find(r => r.status === 'accepted');
          
-         if (accepted) throw new Error("Vous êtes déjà amis avec cette personne.");
+         if (accepted) {
+            // Si amis mais conversation supprimée -> la restaurer
+            // (Logique simplifiée: on renvoie une erreur pour dire qu'ils sont déjà amis, 
+            // mais dans sendMessage, le reset last_deleted_at gère la réapparition)
+            throw new Error("Vous êtes déjà amis avec cette personne.");
+         }
          if (pending) throw new Error("Une demande d'ami est déjà en attente.");
     }
 
-    // Vérifier s'ils ont déjà une conversation privée ensemble (optionnel, mais propre)
-    // (On saute cette étape pour le MVP pour faire confiance à la table friend_requests)
-
-    // Insertion de la demande
     const { error } = await supabase
         .from('friend_requests')
         .insert([{ sender_id: currentUserId, receiver_id: targetUser.id, status: 'pending' }]);
@@ -215,25 +282,17 @@ export const getIncomingFriendRequestsAPI = async (userId: string): Promise<Frie
     
     const { data, error } = await supabase
         .from('friend_requests')
-        .select(`
-            *,
-            sender:sender_id (username, tag, email)
-        `)
+        .select(`*, sender:sender_id (username, tag, email)`)
         .eq('receiver_id', userId)
         .eq('status', 'pending');
 
     if (error) return [];
-    
-    return data.map((r: any) => ({
-        ...r,
-        sender: { ...r.sender, id: r.sender_id } // Aplatir la structure pour le type User
-    }));
+    return data.map((r: any) => ({ ...r, sender: { ...r.sender, id: r.sender_id } }));
 };
 
 export const respondToFriendRequestAPI = async (requestId: string, status: 'accepted' | 'rejected'): Promise<Conversation | null> => {
     if (!supabase) return null;
 
-    // 1. Mettre à jour le statut
     const { data: request, error: updateError } = await supabase
         .from('friend_requests')
         .update({ status })
@@ -244,56 +303,31 @@ export const respondToFriendRequestAPI = async (requestId: string, status: 'acce
     if (updateError || !request) throw new Error("Impossible de mettre à jour la demande.");
 
     if (status === 'accepted') {
-        // 2. Créer la conversation privée
+        // Créer conversation
         const { data: conv, error: convError } = await supabase
             .from('conversations')
-            .insert([{ is_group: false, name: null }]) // is_group false = privé
+            .insert([{ is_group: false }])
             .select()
             .single();
             
-        if (convError || !conv) throw new Error("Erreur lors de la création du chat.");
+        if (convError || !conv) throw new Error("Erreur création chat.");
             
-        // 3. Ajouter les participants
-        const { error: partError } = await supabase.from('participants').insert([
+        // Ajouter participants
+        await supabase.from('participants').insert([
             { conversation_id: conv.id, user_id: request.sender_id },
             { conversation_id: conv.id, user_id: request.receiver_id }
         ]);
-
-        if (partError) throw partError;
         
-        // 4. Message d'accueil système
-        await sendMessageAPI(conv.id, request.receiver_id, "👋 Demande d'ami acceptée ! Vous pouvez discuter.");
+        // Message système
+        await sendMessageAPI(conv.id, request.receiver_id, "👋 Ami accepté !");
         
         return conv as Conversation;
     }
     return null;
 };
 
-export const deleteConversationAPI = async (conversationId: string): Promise<boolean> => {
-    if (!supabase) return false;
-    const { error } = await supabase.from('conversations').delete().eq('id', conversationId);
-    return !error;
-};
-
-export const getOtherParticipant = async (conversationId: string, currentUserId: string): Promise<User | undefined> => {
-    if (!supabase) return undefined;
-    
-    const { data } = await supabase
-        .from('participants')
-        .select('user_id')
-        .eq('conversation_id', conversationId)
-        .neq('user_id', currentUserId)
-        .single();
-        
-    if (data) {
-        return await getUserByIdAPI(data.user_id);
-    }
-    return undefined;
-};
-
 // --- REALTIME SUBSCRIPTIONS ---
 
-// Écouter les nouveaux messages d'une conversation
 export const subscribeToMessages = (conversationId: string, onMessage: (msg: Message) => void) => {
     if (!supabase) return () => {};
 
@@ -302,13 +336,14 @@ export const subscribeToMessages = (conversationId: string, onMessage: (msg: Mes
         .on(
             'postgres_changes', 
             { 
-                event: 'INSERT', 
+                event: '*', // Écoute INSERT et UPDATE (pour les modifs/suppressions)
                 schema: 'public', 
                 table: 'messages', 
                 filter: `conversation_id=eq.${conversationId}` 
             }, 
             async (payload) => {
                 const newMsg = payload.new as Message;
+                // Fetch sender info pour l'affichage propre
                 const sender = await getUserByIdAPI(newMsg.sender_id);
                 onMessage({
                     ...newMsg,
@@ -323,29 +358,27 @@ export const subscribeToMessages = (conversationId: string, onMessage: (msg: Mes
     };
 };
 
-// Écouter les demandes d'amis entrantes (POUR LE DASHBOARD)
 export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {
-    if (!supabase) return () => {};
-
     const channel = supabase
         .channel(`requests:${userId}`)
         .on(
             'postgres_changes',
-            {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'friend_requests',
-                filter: `receiver_id=eq.${userId}` // Uniquement les demandes reçues
-            },
-            (payload) => {
-                if (payload.new.status === 'pending') {
-                    onNewRequest();
-                }
-            }
+            { event: 'INSERT', schema: 'public', table: 'friend_requests', filter: `receiver_id=eq.${userId}` },
+            (payload) => { if (payload.new.status === 'pending') onNewRequest(); }
         )
         .subscribe();
 
-    return () => {
-        supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
+};
+
+export const subscribeToConversationsList = (onUpdate: () => void) => {
+    // On simplifie pour le MVP : on recharge si n'importe quel message change
+    // Idéalement on filtre sur les conversations de l'user
+    const channel = supabase
+        .channel(`global_conversations`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => onUpdate())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests' }, () => onUpdate())
+        .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
 };

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Conversation, User } from '../../types';
-import { getOtherParticipant } from '../../services/mockBackend';
+import { getOtherParticipant } from '../../services/api';
 import { Users, User as UserIcon, Trash2 } from 'lucide-react';
 
 interface ConversationListProps {

@@ -12,7 +12,7 @@ import {
   respondToFriendRequestAPI,
   subscribeToFriendRequests,
   subscribeToConversationsList
-} from './services/mockBackend';
+} from './services/api';
 import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
@@ -38,18 +38,26 @@ const Dashboard = () => {
   // Fetch Data Functions
   const fetchConversations = async () => {
       if(!user) return;
-      const convs = await getConversationsAPI(user.id);
-      setConversations(convs);
+      try {
+          const convs = await getConversationsAPI(user.id);
+          setConversations(convs);
+      } catch (e) {
+          console.error("Error fetching conversations (Ensure Server is Running)", e);
+      }
   };
 
   const fetchRequests = async () => {
       if(!user) return;
-      const reqs = await getIncomingFriendRequestsAPI(user.id);
-      setFriendRequests(reqs);
-      
-      // Update badge count
-      const pendingCount = reqs.filter(r => r.status === 'pending').length;
-      setUnreadNotifsCount(pendingCount);
+      try {
+          const reqs = await getIncomingFriendRequestsAPI(user.id);
+          setFriendRequests(reqs);
+          
+          // Update badge count
+          const pendingCount = reqs.filter(r => r.status === 'pending').length;
+          setUnreadNotifsCount(pendingCount);
+      } catch (e) {
+          console.error("Error fetching requests", e);
+      }
   };
 
   // Initial Load + Realtime Subscriptions
@@ -123,7 +131,7 @@ const Dashboard = () => {
         
         if (status === 'accepted' && newConv) {
             await fetchConversations(); 
-            setActiveConversationId(newConv.id);
+            setActiveConversationId(newConv.id); // Note: ID might not be perfectly sync if backend doesn't return it in body
             setShowNotifications(false);
         }
       } catch (err) {

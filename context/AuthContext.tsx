@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
-import { getUserByIdAPI } from '../services/mockBackend';
+import { getUserByIdAPI } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
@@ -28,6 +28,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                   if (foundUser) {
                       setUser(foundUser);
                       setToken(storedToken);
+                  } else {
+                      // User not found in API (maybe deleted or token invalid)
+                      throw new Error("User not found");
                   }
               } catch (e) {
                   console.error("Session restoration failed", e);

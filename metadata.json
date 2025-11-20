@@ -1,4 +1,5 @@
 {
   "name": "RealTime Chat MVP",
-  "description": "A WhatsApp-like messaging application with authentication, real-time updates, and conversation management, simulating a Node.js/PostgreSQL backend."
+  "description": "A WhatsApp-like messaging application with authentication, real-time updates, and conversation management, simulating a Node.js/PostgreSQL backend.",
+  "requestFramePermissions": []
 }

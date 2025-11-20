@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, subscribeToMessages, getOtherParticipant } from '../../services/supabaseService';
+import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant } from '../../services/mockBackend';
 import { MessageBubble } from './MessageBubble';
-import { Send, MoreVertical, Phone, Video, ArrowLeft } from 'lucide-react';
+import { Send, MoreVertical, Phone, Video, ArrowLeft, X } from 'lucide-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -15,6 +15,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [headerName, setHeaderName] = useState('');
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -45,11 +46,21 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
     const unsubscribe = subscribeToMessages(conversation.id, (newMessage) => {
         setMessages(prev => {
-            // Avoid duplicates
-            if (prev.find(m => m.id === newMessage.id)) return prev;
+            // Check if it's an update to an existing message (Edit/Delete)
+            const existingIndex = prev.findIndex(m => m.id === newMessage.id);
+            if (existingIndex !== -1) {
+                const updated = [...prev];
+                updated[existingIndex] = newMessage;
+                return updated;
+            }
+            // Or a new message
             return [...prev, newMessage];
         });
-        setTimeout(scrollToBottom, 100);
+        
+        // Only scroll if it's a new message, not an edit
+        if (!messages.find(m => m.id === newMessage.id)) {
+            setTimeout(scrollToBottom, 100);
+        }
     });
 
     return () => {
@@ -57,21 +68,56 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     };
   }, [conversation.id]);
 
-  const handleSend = async (e: React.FormEvent) => {
+  // --- ACTIONS ---
+
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim()) return;
 
     const text = inputText;
-    setInputText(''); 
-
-    try {
-      await sendMessageAPI(conversation.id, currentUser.id, text);
-      // Realtime will handle the display update
-    } catch (err) {
-      console.error("Failed to send", err);
-      setInputText(text);
-      alert("Erreur d'envoi");
+    
+    if (editingMessage) {
+        // EDIT MODE
+        try {
+            await editMessageAPI(editingMessage.id, text);
+            setEditingMessage(null);
+            setInputText('');
+        } catch (err) {
+            console.error("Failed to edit", err);
+            alert("Impossible de modifier le message");
+        }
+    } else {
+        // SEND MODE
+        setInputText(''); 
+        try {
+            await sendMessageAPI(conversation.id, currentUser.id, text);
+        } catch (err) {
+            console.error("Failed to send", err);
+            setInputText(text);
+            alert("Erreur d'envoi");
+        }
     }
+  };
+
+  const handleStartEdit = (msg: Message) => {
+      setEditingMessage(msg);
+      setInputText(msg.content);
+  };
+
+  const handleCancelEdit = () => {
+      setEditingMessage(null);
+      setInputText('');
+  };
+
+  const handleDelete = async (msg: Message) => {
+      if(window.confirm("Supprimer ce message pour tout le monde ?")) {
+          try {
+              await deleteMessageAPI(msg.id);
+          } catch (e) {
+              console.error(e);
+              alert("Erreur suppression");
+          }
+      }
   };
 
   return (
@@ -111,7 +157,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     <MessageBubble 
                         key={msg.id} 
                         message={msg} 
-                        isOwn={msg.sender_id === currentUser.id} 
+                        isOwn={msg.sender_id === currentUser.id}
+                        onEdit={handleStartEdit}
+                        onDelete={handleDelete}
                     />
                 ))
             )}
@@ -120,18 +168,29 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
         {/* Input Area */}
         <div className="w-full bg-white px-4 py-3 border-t border-gray-100">
-            <form onSubmit={handleSend} className="flex items-center gap-2">
+            {editingMessage && (
+                <div className="flex items-center justify-between bg-orange-50 px-4 py-2 rounded-t-lg border-l-4 border-orange-500 mb-2">
+                    <div className="flex flex-col">
+                        <span className="text-xs font-bold text-orange-700">Modification du message</span>
+                        <span className="text-xs text-gray-500 truncate max-w-[200px]">{editingMessage.content}</span>
+                    </div>
+                    <button onClick={handleCancelEdit} className="text-gray-400 hover:text-gray-600">
+                        <X size={16} />
+                    </button>
+                </div>
+            )}
+            <form onSubmit={handleSendMessage} className="flex items-center gap-2">
                 <input
                     type="text"
                     value={inputText}
                     onChange={(e) => setInputText(e.target.value)}
-                    placeholder="Écrivez un message..."
-                    className="flex-1 py-3 px-4 rounded-full border border-gray-200 focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-gray-50 shadow-inner transition-all"
+                    placeholder={editingMessage ? "Modifier votre message..." : "Écrivez un message..."}
+                    className={`flex-1 py-3 px-4 rounded-full border focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-gray-50 shadow-inner transition-all ${editingMessage ? 'border-orange-300 ring-2 ring-orange-100' : 'border-gray-200'}`}
                 />
                 <button 
                     type="submit" 
                     disabled={!inputText.trim()}
-                    className="p-3 bg-orange-600 text-white rounded-full hover:bg-orange-700 disabled:opacity-50 disabled:hover:bg-orange-600 transition-all shadow-md flex-shrink-0 transform hover:scale-105 active:scale-95"
+                    className={`p-3 rounded-full text-white shadow-md flex-shrink-0 transform transition-all ${editingMessage ? 'bg-green-600 hover:bg-green-700' : 'bg-orange-600 hover:bg-orange-700'} disabled:opacity-50 disabled:hover:bg-orange-600 hover:scale-105 active:scale-95`}
                 >
                     <Send size={20} className="ml-0.5" />
                 </button>

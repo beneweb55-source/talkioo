@@ -28,58 +28,70 @@ const saveToStorage = (key: string, data: any) => {
 };
 
 // --- REALTIME ENGINE (BroadcastChannel) ---
-// Permet à deux onglets du même navigateur de communiquer (ex: Alice dans Tab 1, Bob dans Tab 2)
+// Simulates WebSockets for a serverless environment
 const channel = new BroadcastChannel('talkio_realtime_channel');
 
 type EventType = 
     | { type: 'NEW_MESSAGE', payload: Message }
+    | { type: 'MESSAGE_UPDATE', payload: Message } // Covers Edit and Delete
     | { type: 'FRIEND_REQUEST', payload: FriendRequest }
-    | { type: 'REQUEST_RESPONSE', payload: { requestId: string, status: string, conversationId?: string } };
+    | { type: 'REQUEST_RESPONSE', payload: { requestId: string, status: string, conversationId?: string } }
+    | { type: 'CONVERSATION_UPDATED', payload: { conversationId: string } };
 
 const listeners: { [key: string]: Function[] } = {
     messages: [],
-    requests: []
+    requests: [],
+    conversations: []
 };
 
 channel.onmessage = (event) => {
     const data = event.data as EventType;
     if (data.type === 'NEW_MESSAGE') {
         listeners.messages.forEach(cb => cb(data.payload));
+        listeners.conversations.forEach(cb => cb()); 
+    } else if (data.type === 'MESSAGE_UPDATE') {
+        listeners.messages.forEach(cb => cb(data.payload));
+        listeners.conversations.forEach(cb => cb());
     } else if (data.type === 'FRIEND_REQUEST') {
         listeners.requests.forEach(cb => cb());
     } else if (data.type === 'REQUEST_RESPONSE') {
-        // Refresh general si besoin, ou spécifique
         listeners.requests.forEach(cb => cb());
+        listeners.conversations.forEach(cb => cb());
+    } else if (data.type === 'CONVERSATION_UPDATED') {
+        listeners.conversations.forEach(cb => cb());
     }
 };
 
 // --- DATA INITIALIZATION ---
-// Structure relationnelle type SQL simulée en objets JSON
-let USERS = loadFromStorage<User[]>(STORAGE_KEYS.USERS, [
-  { id: '1', username: 'Alice', tag: '1234', email: 'alice@test.com', created_at: new Date().toISOString() },
-  { id: '2', username: 'Bob', tag: '5678', email: 'bob@test.com', created_at: new Date().toISOString() }
-]);
-
-let CONVERSATIONS = loadFromStorage<Conversation[]>(STORAGE_KEYS.CONVERSATIONS, []);
-let PARTICIPANTS = loadFromStorage<Participant[]>(STORAGE_KEYS.PARTICIPANTS, []);
-let MESSAGES = loadFromStorage<Message[]>(STORAGE_KEYS.MESSAGES, []);
-let FRIEND_REQUESTS = loadFromStorage<FriendRequest[]>(STORAGE_KEYS.FRIEND_REQUESTS, []);
+let USERS: User[] = [];
+let CONVERSATIONS: Conversation[] = [];
+let PARTICIPANTS: Participant[] = [];
+let MESSAGES: Message[] = [];
+let FRIEND_REQUESTS: FriendRequest[] = [];
 
 // --- AUTH SERVICES ---
 
 export const registerAPI = async (username: string, email: string, password: string): Promise<AuthResponse> => {
   await new Promise(resolve => setTimeout(resolve, 600));
-  USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
+  USERS = loadFromStorage(STORAGE_KEYS.USERS, []); 
 
-  if (USERS.find(u => u.email.toLowerCase() === email.toLowerCase())) {
+  if (USERS.find(u => u.email.toLowerCase() === email.trim().toLowerCase())) {
     throw new Error("Cet email est déjà utilisé.");
   }
 
+  // Generate Random Tag (1000-9999)
+  let tag = Math.floor(1000 + Math.random() * 9000).toString();
+  let attempts = 0;
+  while (USERS.find(u => u.username.toLowerCase() === username.toLowerCase() && u.tag === tag) && attempts < 10) {
+      tag = Math.floor(1000 + Math.random() * 9000).toString();
+      attempts++;
+  }
+
   const newUser: User = {
-    id: Date.now().toString(), // Simple ID generation
-    username,
-    tag: Math.floor(1000 + Math.random() * 9000).toString(),
-    email,
+    id: Date.now().toString(), 
+    username: username.trim(),
+    tag,
+    email: email.trim(),
     created_at: new Date().toISOString()
   };
   
@@ -91,55 +103,68 @@ export const registerAPI = async (username: string, email: string, password: str
 
 export const loginAPI = async (email: string, password: string): Promise<AuthResponse> => {
   await new Promise(resolve => setTimeout(resolve, 400));
-  USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
+  USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
   
-  const user = USERS.find(u => u.email.toLowerCase() === email.toLowerCase());
+  const user = USERS.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
   if (!user) throw new Error("Identifiants incorrects.");
   
-  // Note: On accepte n'importe quel mot de passe pour la démo locale
   return { user, token: `mock_token_${user.id}` };
 };
 
 export const getUserByIdAPI = async (id: string): Promise<User | undefined> => {
-    USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
+    USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
     return USERS.find(u => u.id === id);
 };
 
 // --- CONVERSATION SERVICES ---
 
 export const getConversationsAPI = async (userId: string): Promise<Conversation[]> => {
-  await new Promise(resolve => setTimeout(resolve, 300));
+  CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, []);
+  PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, []);
+  MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, []);
+
+  const myParticipations = PARTICIPANTS.filter(p => p.user_id === userId);
+  const myConvIds = myParticipations.map(p => p.conversation_id);
   
-  // Recharger les données pour être à jour
-  CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, CONVERSATIONS);
-  PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
-  MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
+  let conversations = CONVERSATIONS.filter(c => myConvIds.includes(c.id));
 
-  // JOIN implicite: Participants -> Conversations
-  const userConvIds = PARTICIPANTS
-    .filter(p => p.user_id === userId)
-    .map(p => p.conversation_id);
-    
-  const conversations = CONVERSATIONS.filter(c => userConvIds.includes(c.id));
-
-  // Enrichir avec le dernier message
-  return conversations.map(c => {
+  // Enrich with last message
+  let enriched = conversations.map(c => {
     const msgs = MESSAGES
+        .filter(m => m.conversation_id === c.id && !m.deleted_at) // Don't show deleted messages as last message preview if possible, or handle text
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    
+    // Fallback if all messages are deleted
+    const allMsgs = MESSAGES
         .filter(m => m.conversation_id === c.id)
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    const latest = allMsgs[0];
+    let preview = "Nouvelle discussion";
+    if (latest) {
+        preview = latest.deleted_at ? "🚫 Message supprimé" : latest.content;
+    }
         
     return {
       ...c,
-      last_message: msgs[0]?.content || "Nouvelle discussion",
-      last_message_at: msgs[0]?.created_at || c.created_at
+      last_message: preview,
+      last_message_at: latest?.created_at || c.created_at
     };
-  }).sort((a, b) => new Date(b.last_message_at!).getTime() - new Date(a.last_message_at!).getTime());
+  });
+
+  // Soft Delete Filter
+  enriched = enriched.filter(c => {
+      const p = myParticipations.find(mp => mp.conversation_id === c.id);
+      if (!p || !p.last_deleted_at) return true;
+      return new Date(c.last_message_at!).getTime() > new Date(p.last_deleted_at).getTime();
+  });
+
+  return enriched.sort((a, b) => new Date(b.last_message_at!).getTime() - new Date(a.last_message_at!).getTime());
 };
 
 export const getMessagesAPI = async (conversationId: string): Promise<Message[]> => {
-    await new Promise(resolve => setTimeout(resolve, 200));
-    MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
-    USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
+    MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, []);
+    USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
 
     const messages = MESSAGES
         .filter(m => m.conversation_id === conversationId)
@@ -156,10 +181,9 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
 };
 
 export const sendMessageAPI = async (conversationId: string, userId: string, content: string): Promise<Message> => {
-  await new Promise(resolve => setTimeout(resolve, 100)); 
-  MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
-  USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
-
+  MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, []);
+  USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
+  
   const sender = USERS.find(u => u.id === userId);
   const newMessage: Message = {
     id: Date.now().toString() + Math.random().toString().slice(2,5),
@@ -173,35 +197,98 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
   MESSAGES.push(newMessage);
   saveToStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
   
-  // Notifier via BroadcastChannel pour les autres onglets
   channel.postMessage({ type: 'NEW_MESSAGE', payload: newMessage });
+  channel.postMessage({ type: 'CONVERSATION_UPDATED', payload: { conversationId } });
   
-  // Notifier localement
   listeners.messages.forEach(cb => cb(newMessage));
+  listeners.conversations.forEach(cb => cb());
   
   return newMessage;
 };
 
-export const deleteConversationAPI = async (conversationId: string): Promise<boolean> => {
-    CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, CONVERSATIONS);
-    PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
-    MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
+// --- NEW: MESSAGE EDITING & DELETION ---
 
-    // Cascade delete simulation
-    PARTICIPANTS = PARTICIPANTS.filter(p => p.conversation_id !== conversationId);
-    MESSAGES = MESSAGES.filter(m => m.conversation_id !== conversationId);
-    CONVERSATIONS = CONVERSATIONS.filter(c => c.id !== conversationId);
+export const editMessageAPI = async (messageId: string, newContent: string): Promise<Message> => {
+    MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, []);
+    USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
     
-    saveToStorage(STORAGE_KEYS.CONVERSATIONS, CONVERSATIONS);
-    saveToStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
+    const msgIndex = MESSAGES.findIndex(m => m.id === messageId);
+    if (msgIndex === -1) throw new Error("Message introuvable");
+
+    const updatedMsg = {
+        ...MESSAGES[msgIndex],
+        content: newContent,
+        updated_at: new Date().toISOString()
+    };
+
+    MESSAGES[msgIndex] = updatedMsg;
     saveToStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
+
+    // Populate sender for UI consistency
+    const sender = USERS.find(u => u.id === updatedMsg.sender_id);
+    const completeMsg = {
+        ...updatedMsg,
+        sender_username: sender ? `${sender.username}#${sender.tag}` : 'Inconnu'
+    };
+
+    channel.postMessage({ type: 'MESSAGE_UPDATE', payload: completeMsg });
+    listeners.messages.forEach(cb => cb(completeMsg));
     
+    return completeMsg;
+};
+
+export const deleteMessageAPI = async (messageId: string): Promise<boolean> => {
+    MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, []);
+    USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
+
+    const msgIndex = MESSAGES.findIndex(m => m.id === messageId);
+    if (msgIndex === -1) return false;
+
+    const updatedMsg = {
+        ...MESSAGES[msgIndex],
+        deleted_at: new Date().toISOString()
+    };
+
+    MESSAGES[msgIndex] = updatedMsg;
+    saveToStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
+
+    const sender = USERS.find(u => u.id === updatedMsg.sender_id);
+    const completeMsg = {
+        ...updatedMsg,
+        sender_username: sender ? `${sender.username}#${sender.tag}` : 'Inconnu'
+    };
+
+    channel.postMessage({ type: 'MESSAGE_UPDATE', payload: completeMsg });
+    channel.postMessage({ type: 'CONVERSATION_UPDATED', payload: { conversationId: updatedMsg.conversation_id } });
+
+    listeners.messages.forEach(cb => cb(completeMsg));
+    listeners.conversations.forEach(cb => cb());
+
+    return true;
+};
+
+export const deleteConversationAPI = async (conversationId: string, userId: string): Promise<boolean> => {
+    PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, []);
+    
+    let found = false;
+    PARTICIPANTS = PARTICIPANTS.map(p => {
+        if (p.conversation_id === conversationId && p.user_id === userId) {
+            found = true;
+            return { ...p, last_deleted_at: new Date().toISOString() };
+        }
+        return p;
+    });
+    
+    if (!found) return false;
+
+    saveToStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
+    listeners.conversations.forEach(cb => cb());
     return true;
 };
 
 export const getOtherParticipant = async (conversationId: string, currentUserId: string): Promise<User | undefined> => {
-    PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
-    USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
+    PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, []);
+    USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
 
     const otherP = PARTICIPANTS.find(p => p.conversation_id === conversationId && p.user_id !== currentUserId);
     if (!otherP) return undefined;
@@ -213,18 +300,16 @@ export const getOtherParticipant = async (conversationId: string, currentUserId:
 export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifier: string): Promise<boolean> => {
     await new Promise(resolve => setTimeout(resolve, 500));
     
-    // Refresh Data
-    USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
-    FRIEND_REQUESTS = loadFromStorage(STORAGE_KEYS.FRIEND_REQUESTS, FRIEND_REQUESTS);
+    USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
+    FRIEND_REQUESTS = loadFromStorage(STORAGE_KEYS.FRIEND_REQUESTS, []);
+    PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, []);
 
-    // Parse: "Nom#1234"
     const parts = targetIdentifier.split('#');
     if (parts.length !== 2) throw new Error("Format invalide. Utilisez 'Nom#1234'");
     
     const username = parts[0].trim();
     const tag = parts[1].trim();
 
-    // Recherche insensible à la casse pour le nom, mais exacte pour le tag
     const targetUser = USERS.find(u => 
         u.username.toLowerCase() === username.toLowerCase() && 
         u.tag === tag
@@ -236,15 +321,36 @@ export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifi
     
     if (targetUser.id === currentUserId) throw new Error("Vous ne pouvez pas vous ajouter vous-même.");
 
-    // Vérifier existence
     const existingReq = FRIEND_REQUESTS.find(
         r => (r.sender_id === currentUserId && r.receiver_id === targetUser.id) || 
              (r.sender_id === targetUser.id && r.receiver_id === currentUserId)
     );
 
-    if (existingReq) {
-        if (existingReq.status === 'pending') throw new Error("Une demande est déjà en attente.");
-        if (existingReq.status === 'accepted') throw new Error("Vous êtes déjà amis.");
+    const myConvs = PARTICIPANTS.filter(p => p.user_id === currentUserId).map(p => p.conversation_id);
+    const commonConv = PARTICIPANTS.find(p => p.user_id === targetUser.id && myConvs.includes(p.conversation_id));
+
+    if (commonConv) {
+        const myPart = PARTICIPANTS.find(p => p.user_id === currentUserId && p.conversation_id === commonConv.conversation_id);
+        
+        if (myPart && myPart.last_deleted_at) {
+            myPart.last_deleted_at = null;
+            saveToStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
+            
+            channel.postMessage({ type: 'CONVERSATION_UPDATED', payload: { conversationId: commonConv.conversation_id } });
+            listeners.conversations.forEach(cb => cb());
+            throw new Error("Conversation rouverte ! (Vous étiez déjà amis)");
+        }
+
+        throw new Error("Vous avez déjà une conversation active avec cette personne.");
+    }
+
+    if (existingReq && existingReq.status === 'pending') throw new Error("Une demande est déjà en attente.");
+
+    if (existingReq && existingReq.status === 'accepted') {
+         await createConversationInternal(currentUserId, targetUser.id);
+         channel.postMessage({ type: 'CONVERSATION_UPDATED', payload: { conversationId: 'restored' } });
+         listeners.conversations.forEach(cb => cb());
+         throw new Error("Conversation rouverte !");
     }
 
     const newRequest: FriendRequest = {
@@ -258,16 +364,15 @@ export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifi
     FRIEND_REQUESTS.push(newRequest);
     saveToStorage(STORAGE_KEYS.FRIEND_REQUESTS, FRIEND_REQUESTS);
 
-    // Realtime notify
     channel.postMessage({ type: 'FRIEND_REQUEST', payload: newRequest });
+    listeners.requests.forEach(cb => cb());
 
     return true;
 };
 
 export const getIncomingFriendRequestsAPI = async (userId: string): Promise<FriendRequest[]> => {
-    await new Promise(resolve => setTimeout(resolve, 200));
-    FRIEND_REQUESTS = loadFromStorage(STORAGE_KEYS.FRIEND_REQUESTS, FRIEND_REQUESTS);
-    USERS = loadFromStorage(STORAGE_KEYS.USERS, USERS);
+    FRIEND_REQUESTS = loadFromStorage(STORAGE_KEYS.FRIEND_REQUESTS, []);
+    USERS = loadFromStorage(STORAGE_KEYS.USERS, []);
 
     const requests = FRIEND_REQUESTS.filter(r => r.receiver_id === userId && r.status === 'pending');
     
@@ -280,7 +385,7 @@ export const getIncomingFriendRequestsAPI = async (userId: string): Promise<Frie
 export const respondToFriendRequestAPI = async (requestId: string, status: 'accepted' | 'rejected'): Promise<Conversation | null> => {
     await new Promise(resolve => setTimeout(resolve, 400));
     
-    FRIEND_REQUESTS = loadFromStorage(STORAGE_KEYS.FRIEND_REQUESTS, FRIEND_REQUESTS);
+    FRIEND_REQUESTS = loadFromStorage(STORAGE_KEYS.FRIEND_REQUESTS, []);
     const reqIndex = FRIEND_REQUESTS.findIndex(r => r.id === requestId);
     
     if (reqIndex === -1) throw new Error("Demande introuvable");
@@ -298,14 +403,15 @@ export const respondToFriendRequestAPI = async (requestId: string, status: 'acce
         type: 'REQUEST_RESPONSE', 
         payload: { requestId, status, conversationId: newConv?.id } 
     });
+    listeners.conversations.forEach(cb => cb());
 
     return newConv;
 };
 
 const createConversationInternal = async (user1Id: string, user2Id: string): Promise<Conversation> => {
-    CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, CONVERSATIONS);
-    PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, PARTICIPANTS);
-    MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, MESSAGES);
+    CONVERSATIONS = loadFromStorage(STORAGE_KEYS.CONVERSATIONS, []);
+    PARTICIPANTS = loadFromStorage(STORAGE_KEYS.PARTICIPANTS, []);
+    MESSAGES = loadFromStorage(STORAGE_KEYS.MESSAGES, []);
 
     const newId = Date.now().toString();
     const newConv: Conversation = {
@@ -313,19 +419,19 @@ const createConversationInternal = async (user1Id: string, user2Id: string): Pro
         name: null,
         is_group: false,
         created_at: new Date().toISOString(),
-        last_message: "Vous êtes maintenant amis !",
+        last_message: "👋 Discussion commencée",
         last_message_at: new Date().toISOString()
     };
 
     CONVERSATIONS.push(newConv);
-    PARTICIPANTS.push({ user_id: user1Id, conversation_id: newId, joined_at: new Date().toISOString() });
-    PARTICIPANTS.push({ user_id: user2Id, conversation_id: newId, joined_at: new Date().toISOString() });
+    PARTICIPANTS.push({ user_id: user1Id, conversation_id: newId, joined_at: new Date().toISOString(), last_deleted_at: null });
+    PARTICIPANTS.push({ user_id: user2Id, conversation_id: newId, joined_at: new Date().toISOString(), last_deleted_at: null });
     
     const sysMsg: Message = {
         id: Date.now().toString() + "_sys",
         conversation_id: newId,
-        sender_id: user1Id,
-        content: "👋 Discussion démarrée.",
+        sender_id: user1Id, 
+        content: "👋 Demande acceptée ! Vous pouvez discuter.",
         created_at: new Date().toISOString()
     };
     MESSAGES.push(sysMsg);
@@ -341,6 +447,7 @@ const createConversationInternal = async (user1Id: string, user2Id: string): Pro
 
 export const subscribeToMessages = (conversationId: string, onMessage: (msg: Message) => void) => {
     const handler = (msg: Message) => {
+        // Only pass if it belongs to this conversation
         if (msg.conversation_id === conversationId) {
             onMessage(msg);
         }
@@ -352,12 +459,17 @@ export const subscribeToMessages = (conversationId: string, onMessage: (msg: Mes
 };
 
 export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {
-    const handler = () => {
-        // On pourrait filtrer pour savoir si c'est pour cet user, mais pour le mock on refresh tout
-        onNewRequest();
-    };
+    const handler = () => onNewRequest();
     listeners.requests.push(handler);
     return () => {
         listeners.requests = listeners.requests.filter(cb => cb !== handler);
+    };
+};
+
+export const subscribeToConversationsList = (onUpdate: () => void) => {
+    const handler = () => onUpdate();
+    listeners.conversations.push(handler);
+    return () => {
+        listeners.conversations = listeners.conversations.filter(cb => cb !== handler);
     };
 };

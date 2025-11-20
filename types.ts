@@ -19,6 +19,7 @@ export interface Participant {
   user_id: string;
   conversation_id: string;
   joined_at: string;
+  last_deleted_at?: string | null; // For Soft Delete logic
 }
 
 export interface Message {
@@ -27,6 +28,8 @@ export interface Message {
   sender_id: string;
   content: string;
   created_at: string;
+  updated_at?: string; // New: For edit history
+  deleted_at?: string; // New: For soft delete (delete for everyone)
   sender_username?: string;
 }
 

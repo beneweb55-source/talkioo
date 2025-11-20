@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Conversation, User } from '../../types';
-import { getOtherParticipant } from '../../services/supabaseService';
+import { getOtherParticipant } from '../../services/mockBackend';
 import { Users, User as UserIcon, Trash2 } from 'lucide-react';
 
 interface ConversationListProps {
@@ -57,7 +57,7 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete }: a
 
     const handleDelete = (e: React.MouseEvent) => {
         e.stopPropagation();
-        if(window.confirm("Voulez-vous vraiment supprimer cette conversation ?")) {
+        if(window.confirm("Supprimer cette conversation de votre liste ?\n(Elle réapparaîtra si vous recevez un nouveau message)")) {
             onDelete(conv.id);
         }
     };
@@ -91,7 +91,7 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete }: a
                 <span className="text-[10px] text-gray-400">
                     {new Date(conv.last_message_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                 </span>
-                <button onClick={handleDelete} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={handleDelete} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-full hover:bg-red-50">
                     <Trash2 size={14} />
                 </button>
             </div>

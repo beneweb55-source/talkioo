@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
-import { getUserByIdAPI } from '../services/supabaseService';
-import { supabase } from '../services/supabaseClient';
+import { getUserByIdAPI } from '../services/mockBackend';
 
 interface AuthContextType {
   user: User | null;
@@ -19,46 +18,38 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-      const checkSession = async () => {
-          try {
-              const { data: { session } } = await supabase.auth.getSession();
-              
-              if (session?.user) {
-                  // Récupérer le profil utilisateur complet (avec username/tag)
-                  const userData = await getUserByIdAPI(session.user.id);
-                  if (userData) {
-                      setUser(userData);
-                      setToken(session.access_token);
+      const initSession = async () => {
+          const storedUserId = localStorage.getItem('talkio_current_user_id');
+          const storedToken = localStorage.getItem('talkio_auth_token');
+          
+          if (storedUserId && storedToken) {
+              try {
+                  const foundUser = await getUserByIdAPI(storedUserId);
+                  if (foundUser) {
+                      setUser(foundUser);
+                      setToken(storedToken);
                   }
+              } catch (e) {
+                  console.error("Session restoration failed", e);
+                  localStorage.removeItem('talkio_current_user_id');
+                  localStorage.removeItem('talkio_auth_token');
               }
-          } catch (e) {
-              console.error("Erreur de session Supabase:", e);
-          } finally {
-              setIsLoading(false);
           }
+          setIsLoading(false);
       };
-
-      checkSession();
-
-      // Écouter les changements d'état (ex: déconnexion depuis un autre onglet)
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-          if (!session) {
-              setUser(null);
-              setToken(null);
-              setIsLoading(false);
-          }
-      });
-
-      return () => subscription.unsubscribe();
+      initSession();
   }, []);
 
   const login = (userData: User, authToken: string) => {
+    localStorage.setItem('talkio_current_user_id', userData.id);
+    localStorage.setItem('talkio_auth_token', authToken);
     setUser(userData);
     setToken(authToken);
   };
 
-  const logout = async () => {
-    await supabase.auth.signOut();
+  const logout = () => {
+    localStorage.removeItem('talkio_current_user_id');
+    localStorage.removeItem('talkio_auth_token');
     setUser(null);
     setToken(null);
   };

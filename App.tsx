@@ -10,9 +10,10 @@ import {
   sendFriendRequestAPI, 
   getIncomingFriendRequestsAPI,
   respondToFriendRequestAPI,
-  subscribeToFriendRequests
-} from './services/supabaseService';
-import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy, Database } from 'lucide-react';
+  subscribeToFriendRequests,
+  subscribeToConversationsList
+} from './services/mockBackend';
+import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 
@@ -65,11 +66,16 @@ const Dashboard = () => {
     // Subscribe to NEW Friend Requests (Realtime)
     const unsubscribeRequests = subscribeToFriendRequests(user.id, () => {
         fetchRequests();
-        // Note: On pourrait aussi recharger les conversations si une requête a été acceptée ailleurs
+    });
+
+    // Subscribe to Conversation List updates (New Message, New Friend Accept)
+    const unsubscribeConvs = subscribeToConversationsList(() => {
+        fetchConversations();
     });
 
     return () => {
         unsubscribeRequests();
+        unsubscribeConvs();
     };
   }, [user]);
 
@@ -91,7 +97,17 @@ const Dashboard = () => {
             setModalSuccess('');
         }, 2000);
     } catch (err: any) {
-        setModalError(err.message || "Impossible d'envoyer la demande");
+        // Detection of the "Restored Chat" case
+        if (err.message && err.message.includes('rouverte')) {
+            setModalSuccess(err.message); // Show as success (Green)
+            setNewChatTarget('');
+             setTimeout(() => {
+                setIsModalOpen(false);
+                setModalSuccess('');
+            }, 2000);
+        } else {
+            setModalError(err.message || "Impossible d'envoyer la demande");
+        }
     } finally {
         setModalLoading(false);
     }
@@ -117,7 +133,8 @@ const Dashboard = () => {
   };
 
   const handleDeleteConversation = async (id: string) => {
-      const success = await deleteConversationAPI(id);
+      if (!user) return;
+      const success = await deleteConversationAPI(id, user.id);
       if (success) {
           if (activeConversationId === id) setActiveConversationId(null);
           fetchConversations();
@@ -257,7 +274,7 @@ const Dashboard = () => {
                                               </button>
                                               <button 
                                                 onClick={() => handleRespondToRequest(req.id, 'accepted')}
-                                                className="p-1.5 bg-green-100 text-green-600 rounded-full hover:bg-green-200 transition-colors shadow-sm"
+                                                className="p-1.5 bg-orange-100 text-orange-600 rounded-full hover:bg-orange-200 transition-colors"
                                                 title="Accepter"
                                               >
                                                   <Check size={16} />
@@ -271,79 +288,66 @@ const Dashboard = () => {
                   )}
               </div>
 
-              <button 
-                onClick={() => setIsModalOpen(true)}
-                className="hover:bg-orange-50 p-2 rounded-full transition-colors text-gray-600 hover:text-orange-600" 
-                title="Ajouter un ami"
-              >
-                <UserPlus size={22} />
+              {/* Add Friend Button */}
+              <button onClick={() => setIsModalOpen(true)} className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors" title="Nouveau chat">
+                  <UserPlus size={22} />
               </button>
-              <button onClick={logout} className="hover:bg-red-50 p-2 rounded-full transition-colors text-gray-600 hover:text-red-500" title="Se déconnecter">
-                <LogOut size={22} />
+              
+              {/* Logout */}
+              <button onClick={logout} className="p-2 hover:bg-red-50 rounded-full text-gray-400 hover:text-red-600 transition-colors" title="Se déconnecter">
+                  <LogOut size={22} />
               </button>
            </div>
         </div>
 
-        {/* Search */}
-        <div className="p-3 bg-white">
-            <input type="text" placeholder="Rechercher une discussion..." className="w-full bg-gray-100 text-sm rounded-full px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all border border-transparent focus:bg-white focus:border-orange-200 placeholder-gray-400" />
+        {/* Search (Visual only for MVP) */}
+        <div className="p-3 border-b border-gray-100 bg-gray-50/50">
+             <input 
+                type="text" 
+                placeholder="Rechercher une discussion..." 
+                className="w-full px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
+             />
         </div>
 
         {/* List */}
-        {loading ? (
-            <div className="flex-1 flex items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500"></div>
-            </div>
-        ) : (
-            <ConversationList 
-                conversations={conversations} 
-                activeId={activeConversationId} 
-                onSelect={setActiveConversationId}
-                onDelete={handleDeleteConversation}
-                currentUser={user!}
-            />
-        )}
+        <div className="flex-1 overflow-hidden flex flex-col bg-white">
+            {loading ? (
+                <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-600"></div></div>
+            ) : (
+                <ConversationList 
+                    conversations={conversations}
+                    activeId={activeConversationId}
+                    currentUser={user!}
+                    onSelect={setActiveConversationId}
+                    onDelete={handleDeleteConversation}
+                />
+            )}
+        </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div className={`${!activeConversationId ? 'hidden md:flex' : 'flex'} flex-1 flex-col bg-[#f3f4f6] h-full relative`}>
-        {activeConversation ? (
-            <ChatWindow 
-                conversation={activeConversation} 
-                currentUser={user!} 
-                onBack={() => setActiveConversationId(null)}
-            />
-        ) : (
-            <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 text-gray-500 p-6 text-center relative overflow-hidden select-none">
-                
-                <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center mb-8 shadow-xl shadow-orange-100 relative z-10 border border-orange-50 animate-in zoom-in duration-500">
-                    <Database className="text-orange-600" size={64} />
-                </div>
-                <h1 className="text-4xl font-bold text-gray-800 mb-4 relative z-10 tracking-tight">Talkio <span className="text-orange-600">Cloud</span></h1>
-                <p className="text-base max-w-md text-center mb-8 text-gray-600 leading-relaxed relative z-10">
-                    Connecté à Supabase (PostgreSQL). <br/>
-                    Données synchronisées en temps réel via le cloud.
-                </p>
-                
-                <div 
-                    className="relative z-10 bg-white px-6 py-3 rounded-full shadow-md border border-gray-200 flex items-center gap-3 mb-8 group cursor-pointer hover:border-orange-300 transition-colors transform hover:scale-105 active:scale-95 duration-200" 
-                    onClick={copyToClipboard}
-                >
-                     <span className="font-mono text-lg font-bold text-gray-800 tracking-wide">{user?.username}<span className="text-orange-600">#{user?.tag}</span></span>
-                     <Copy size={16} className="text-gray-400 group-hover:text-orange-600" />
-                </div>
-
-                <Button variant="primary" className="w-auto px-8 relative z-10 bg-orange-600 hover:bg-orange-700" onClick={() => setIsModalOpen(true)}>
-                    <UserPlus size={18} className="mr-2 inline" />
-                    Ajouter un ami
-                </Button>
-                
-                <div className="mt-12 text-xs text-gray-400 flex items-center gap-2 justify-center relative z-10">
-                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Online & Secure
-                </div>
-            </div>
-        )}
+      {/* Chat Area */}
+      <div className={`flex-1 relative bg-gray-200 flex flex-col ${!activeConversationId ? 'hidden md:flex' : 'flex'}`}>
+          {activeConversation && user ? (
+              <ChatWindow 
+                  conversation={activeConversation} 
+                  currentUser={user} 
+                  onBack={() => setActiveConversationId(null)}
+              />
+          ) : (
+              <div className="h-full flex flex-col items-center justify-center text-gray-400 p-6 bg-[#f0f2f5]">
+                  <div className="bg-white p-6 rounded-full shadow-sm mb-6">
+                      <MessageCircleCode size={64} className="text-orange-200" />
+                  </div>
+                  <h1 className="text-3xl font-light text-gray-600 mb-2">Talkio Web</h1>
+                  <p className="text-sm max-w-md text-center text-gray-500">
+                      Envoyez et recevez des messages en temps réel. <br/>
+                      Sélectionnez une conversation pour commencer.
+                  </p>
+                  <div className="mt-8 h-1 w-24 bg-orange-200 rounded-full"></div>
+              </div>
+          )}
       </div>
+
     </div>
   );
 };
@@ -351,21 +355,19 @@ const Dashboard = () => {
 const App = () => {
   return (
     <AuthProvider>
-      <Main />
+      <AuthWrapper />
     </AuthProvider>
   );
 };
 
-const Main = () => {
+const AuthWrapper = () => {
   const { user, isLoading } = useAuth();
 
   if (isLoading) {
-      return <div className="h-screen w-screen flex items-center justify-center bg-gray-100 text-orange-600">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600"></div>
-      </div>
+    return <div className="h-screen w-screen flex items-center justify-center bg-gray-50 text-orange-600">Chargement...</div>;
   }
 
   return user ? <Dashboard /> : <AuthScreen />;
-}
+};
 
 export default App;

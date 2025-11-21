@@ -1,19 +1,15 @@
 import { io, Socket } from 'socket.io-client';
 import { User, Conversation, Message, AuthResponse, FriendRequest } from '../types';
 
-// --- CONFIGURATION DYNAMIQUE ---
+// --- CONFIGURATION ---
+// Detect if we are running locally to switch between Localhost and Render
+const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-// 🚨 URL DE PRODUCTION (Render)
-// Pour ce MVP, on force la connexion au backend en ligne même en local
-// cela permet de tester l'app sans avoir à lancer le serveur Node localement.
-const PROD_BACKEND_URL = 'https://talkioo.onrender.com';
-
-// Si vous voulez utiliser un serveur local, décommentez la ligne suivante :
-// const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:3001' : PROD_BACKEND_URL;
-
-const API_BASE = PROD_BACKEND_URL; 
+// If local, use port 3001 (standard node server), else use production URL
+const API_BASE = isLocal ? 'http://localhost:3001' : 'https://talkioo.onrender.com';
 const API_URL = `${API_BASE}/api`;
 
+console.log(`[Talkio] Environment: ${isLocal ? 'Local' : 'Production'}`);
 console.log(`[Talkio] Connecting to Backend: ${API_BASE}`);
 
 // --- SOCKET INSTANCE ---
@@ -24,14 +20,13 @@ export const connectSocket = (token: string) => {
     
     socket = io(API_BASE, {
         auth: { token },
-        transports: ['websocket', 'polling'], // Polling en backup pour Vercel/Firewalls
+        transports: ['websocket', 'polling'], 
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
     });
 
     socket.on('connect', () => {
         console.log('Socket connected:', socket.id);
-        // Join personal user channel for notifications
         socket.emit('authenticate', token);
     });
 
@@ -58,7 +53,16 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
             headers: { ...headers, ...options.headers }
         });
         
-        const data = await response.json();
+        // Check content type to avoid crashing on HTML 404s
+        const contentType = response.headers.get("content-type");
+        let data;
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+            data = await response.json();
+        } else {
+            // If not JSON (likely HTML error page), throw generic error or text
+            const text = await response.text();
+            throw new Error(`Erreur serveur (${response.status}): Endpoint introuvable ou erreur interne.`);
+        }
         
         if (!response.ok) {
             throw new Error(data.error || 'Erreur API');
@@ -66,7 +70,6 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
         
         return data;
     } catch (error: any) {
-        // Transforme "Failed to fetch" en un message plus clair pour l'utilisateur
         if (error.message === 'Failed to fetch') {
             throw new Error("Impossible de joindre le serveur. Il démarre peut-être ? (Attendez 30s)");
         }
@@ -76,85 +79,66 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
 };
 
 // --- AUTH ---
-
 export const registerAPI = async (username: string, email: string, password: string): Promise<AuthResponse> => {
-    return await fetchWithAuth('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify({ username, email, password })
-    });
+    return await fetchWithAuth('/auth/register', { method: 'POST', body: JSON.stringify({ username, email, password }) });
 };
 
 export const loginAPI = async (email: string, password: string): Promise<AuthResponse> => {
-    return await fetchWithAuth('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password })
-    });
+    return await fetchWithAuth('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
 };
 
 export const getUserByIdAPI = async (id: string): Promise<User | undefined> => {
-    try {
-        return await fetchWithAuth(`/users/${id}`);
-    } catch (e) {
-        return undefined;
-    }
+    try { return await fetchWithAuth(`/users/${id}`); } catch (e) { return undefined; }
+};
+
+export const getOnlineUsersAPI = async (): Promise<string[]> => {
+    try { return await fetchWithAuth('/users/online'); } catch (e) { return []; }
 };
 
 // --- CONVERSATIONS ---
-
 export const getConversationsAPI = async (userId: string): Promise<Conversation[]> => {
     return await fetchWithAuth('/conversations');
 };
 
+export const createGroupConversationAPI = async (name: string, participantIds: string[]): Promise<{conversationId: string}> => {
+    return await fetchWithAuth('/conversations', {
+        method: 'POST',
+        body: JSON.stringify({ name, participantIds })
+    });
+};
+
 export const deleteConversationAPI = async (conversationId: string, userId: string): Promise<boolean> => {
-    try {
-        await fetchWithAuth(`/conversations/${conversationId}`, { method: 'DELETE' });
-        return true;
-    } catch (e) {
-        return false;
-    }
+    try { await fetchWithAuth(`/conversations/${conversationId}`, { method: 'DELETE' }); return true; } catch (e) { return false; }
 };
 
 export const getOtherParticipant = async (conversationId: string, currentUserId: string): Promise<User | undefined> => {
     return await fetchWithAuth(`/conversations/${conversationId}/other`);
 };
 
-// --- MESSAGES ---
+export const getContactsAPI = async (): Promise<User[]> => {
+    return await fetchWithAuth('/contacts');
+};
 
+// --- MESSAGES ---
 export const getMessagesAPI = async (conversationId: string): Promise<Message[]> => {
     return await fetchWithAuth(`/conversations/${conversationId}/messages`);
 };
 
 export const sendMessageAPI = async (conversationId: string, userId: string, content: string): Promise<Message> => {
-    return await fetchWithAuth('/messages', {
-        method: 'POST',
-        body: JSON.stringify({ conversation_id: conversationId, content })
-    });
+    return await fetchWithAuth('/messages', { method: 'POST', body: JSON.stringify({ conversation_id: conversationId, content }) });
 };
 
 export const editMessageAPI = async (messageId: string, newContent: string): Promise<Message> => {
-    return await fetchWithAuth(`/messages/${messageId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ content: newContent })
-    });
+    return await fetchWithAuth(`/messages/${messageId}`, { method: 'PUT', body: JSON.stringify({ content: newContent }) });
 };
 
 export const deleteMessageAPI = async (messageId: string): Promise<boolean> => {
-    try {
-        await fetchWithAuth(`/messages/${messageId}`, { method: 'DELETE' });
-        return true;
-    } catch (e) {
-        return false;
-    }
+    try { await fetchWithAuth(`/messages/${messageId}`, { method: 'DELETE' }); return true; } catch (e) { return false; }
 };
 
 // --- FRIEND REQUESTS ---
-
 export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifier: string): Promise<any> => {
-    const response = await fetchWithAuth('/friend_requests', {
-        method: 'POST',
-        body: JSON.stringify({ targetIdentifier })
-    });
-    return response;
+    return await fetchWithAuth('/friend_requests', { method: 'POST', body: JSON.stringify({ targetIdentifier }) });
 };
 
 export const getIncomingFriendRequestsAPI = async (userId: string): Promise<FriendRequest[]> => {
@@ -162,15 +146,18 @@ export const getIncomingFriendRequestsAPI = async (userId: string): Promise<Frie
 };
 
 export const respondToFriendRequestAPI = async (requestId: string, status: 'accepted' | 'rejected'): Promise<Conversation | null> => {
-    const res = await fetchWithAuth(`/friend_requests/${requestId}/respond`, {
-        method: 'POST',
-        body: JSON.stringify({ status })
-    });
-    
-    if (status === 'accepted' && res.conversationId) {
-        return { id: res.conversationId } as Conversation;
-    }
+    const res = await fetchWithAuth(`/friend_requests/${requestId}/respond`, { method: 'POST', body: JSON.stringify({ status }) });
+    if (status === 'accepted' && res.conversationId) return { id: res.conversationId } as Conversation;
     return null;
+};
+
+// --- TYPING EVENTS ---
+export const sendTypingEvent = (conversationId: string) => {
+    if(socket) socket.emit('typing_start', { conversationId });
+};
+
+export const sendStopTypingEvent = (conversationId: string) => {
+    if(socket) socket.emit('typing_stop', { conversationId });
 };
 
 // --- REALTIME SUBSCRIPTIONS ---
@@ -181,9 +168,7 @@ export const subscribeToMessages = (conversationId: string, onMessage: (msg: Mes
     socket.emit('join_room', conversationId);
 
     const handler = (msg: Message) => {
-        if (msg.conversation_id === conversationId) {
-            onMessage(msg);
-        }
+        if (msg.conversation_id === conversationId) onMessage(msg);
     };
 
     socket.on('new_message', handler);
@@ -195,26 +180,50 @@ export const subscribeToMessages = (conversationId: string, onMessage: (msg: Mes
     };
 };
 
-export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {
+export const subscribeToTypingEvents = (conversationId: string, onTyping: (userId: string, isTyping: boolean) => void) => {
     if (!socket) return () => {};
     
+    const handler = (data: { conversationId: string, userId: string, isTyping: boolean }) => {
+        if (data.conversationId === conversationId) {
+            onTyping(data.userId, data.isTyping);
+        }
+    };
+    socket.on('typing_update', handler);
+    return () => socket.off('typing_update', handler);
+};
+
+export const subscribeToUserStatus = (onStatusChange: (userId: string, isOnline: boolean) => void) => {
+    if (!socket) return () => {};
+    const handler = (data: { userId: string, isOnline: boolean }) => {
+        onStatusChange(data.userId, data.isOnline);
+    };
+    socket.on('user_status', handler);
+    return () => socket.off('user_status', handler);
+};
+
+export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {
+    if (!socket) return () => {};
     const handler = () => onNewRequest();
     socket.on('friend_request', handler);
-    
     return () => socket.off('friend_request', handler);
 };
 
 export const subscribeToConversationsList = (onUpdate: () => void) => {
     if (!socket) return () => {};
 
-    const handler = () => onUpdate();
-    socket.on('new_message', handler);
-    socket.on('message_update', handler);
-    socket.on('request_accepted', handler);
+    const handler = (data: any) => {
+        console.log("List Update Event:", data);
+        onUpdate();
+    };
+    
+    // Listen to Global User Events
+    socket.on('conversation_added', handler);
+    socket.on('conversation_updated', handler);
+    socket.on('request_accepted', handler); 
     
     return () => {
-        socket.off('new_message', handler);
-        socket.off('message_update', handler);
+        socket.off('conversation_added', handler);
+        socket.off('conversation_updated', handler);
         socket.off('request_accepted', handler);
     };
 };

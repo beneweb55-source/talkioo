@@ -1,35 +1,48 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant } from '../../services/api';
+import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, MoreVertical, Phone, Video, ArrowLeft, X } from 'lucide-react';
+import { Send, MoreVertical, Phone, Video, X } from 'lucide-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
   currentUser: User;
   onBack?: () => void;
+  onlineUsers: Set<string>;
 }
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUser, onBack }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUser, onBack, onlineUsers }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [headerName, setHeaderName] = useState('');
+  const [otherUserId, setOtherUserId] = useState<string | null>(null);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  
+  // Typing Logic
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const typingTimeoutRef = useRef<any>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Load Name
+  // Load Name & Participant Info
   useEffect(() => {
       const loadName = async () => {
         if (conversation.is_group) {
             setHeaderName(conversation.name || 'Groupe');
+            setOtherUserId(null);
         } else {
             const other = await getOtherParticipant(conversation.id, currentUser.id);
-            setHeaderName(other ? `${other.username}#${other.tag}` : 'Inconnu');
+            if (other) {
+                setHeaderName(`${other.username}#${other.tag}`);
+                setOtherUserId(other.id);
+            } else {
+                setHeaderName('Inconnu');
+            }
         }
       };
       loadName();
@@ -38,46 +51,73 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   // Load history + Subscribe Realtime
   useEffect(() => {
     setLoading(true);
+    setTypingUsers(new Set());
     getMessagesAPI(conversation.id).then(data => {
       setMessages(data);
       setLoading(false);
       setTimeout(scrollToBottom, 100);
     });
 
-    const unsubscribe = subscribeToMessages(conversation.id, (newMessage) => {
+    const unsubscribeMsgs = subscribeToMessages(conversation.id, (newMessage) => {
         setMessages(prev => {
-            // Check if it's an update to an existing message (Edit/Delete)
             const existingIndex = prev.findIndex(m => m.id === newMessage.id);
             if (existingIndex !== -1) {
                 const updated = [...prev];
                 updated[existingIndex] = newMessage;
                 return updated;
             }
-            // Or a new message
             return [...prev, newMessage];
         });
         
-        // Only scroll if it's a new message, not an edit
         if (!messages.find(m => m.id === newMessage.id)) {
             setTimeout(scrollToBottom, 100);
         }
     });
 
+    const unsubscribeTyping = subscribeToTypingEvents(conversation.id, (userId, isTyping) => {
+        setTypingUsers(prev => {
+            const next = new Set(prev);
+            if (isTyping) next.add(userId);
+            else next.delete(userId);
+            return next;
+        });
+    });
+
     return () => {
-        unsubscribe();
+        unsubscribeMsgs();
+        unsubscribeTyping();
     };
   }, [conversation.id]);
 
-  // --- ACTIONS ---
+  // --- TYPING HANDLER ---
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      setInputText(e.target.value);
+
+      // Emit typing start
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      else sendTypingEvent(conversation.id);
+
+      // Debounce stop
+      typingTimeoutRef.current = setTimeout(() => {
+          sendStopTypingEvent(conversation.id);
+          typingTimeoutRef.current = null;
+      }, 2000);
+  };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim()) return;
+    
+    // Clear typing immediately
+    if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+        sendStopTypingEvent(conversation.id);
+    }
 
     const text = inputText;
     
     if (editingMessage) {
-        // EDIT MODE
         try {
             await editMessageAPI(editingMessage.id, text);
             setEditingMessage(null);
@@ -87,7 +127,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             alert("Impossible de modifier le message");
         }
     } else {
-        // SEND MODE
         setInputText(''); 
         try {
             await sendMessageAPI(conversation.id, currentUser.id, text);
@@ -111,40 +150,39 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   const handleDelete = async (msg: Message) => {
       if(window.confirm("Supprimer ce message pour tout le monde ?")) {
-          try {
-              await deleteMessageAPI(msg.id);
-          } catch (e) {
-              console.error(e);
-              alert("Erreur suppression");
-          }
+          try { await deleteMessageAPI(msg.id); } catch (e) { alert("Erreur suppression"); }
       }
   };
 
+  const isOnline = otherUserId && onlineUsers.has(otherUserId);
+  const typingCount = typingUsers.size;
+
   return (
-    <div className="flex flex-col h-full bg-[#e5ddd5] relative">
+    <div className="flex flex-col h-full relative transition-colors duration-300">
         {/* Header */}
-        <div className="h-16 bg-white/90 backdrop-blur-md border-b border-gray-200 flex items-center justify-between px-4 shadow-sm z-10">
-            <div className="flex items-center gap-3">
-                {onBack && (
-                    <button onClick={onBack} className="md:hidden text-gray-600 hover:bg-gray-100 p-1 rounded-full">
-                        <ArrowLeft size={20} />
-                    </button>
-                )}
-                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-500 to-orange-700 text-white flex items-center justify-center font-bold shadow-sm">
+        <div className="h-16 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 shadow-sm z-10 shrink-0 transition-colors">
+            <div className="flex items-center gap-3 overflow-hidden">
+                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-500 to-orange-700 text-white flex items-center justify-center font-bold shadow-sm flex-shrink-0">
                     {headerName?.charAt(0).toUpperCase() || '?'}
                 </div>
-                <div>
-                    <h2 className="text-gray-800 font-semibold text-base leading-tight">{headerName}</h2>
+                <div className="overflow-hidden">
+                    <h2 className="text-gray-800 dark:text-gray-100 font-semibold text-base leading-tight truncate">{headerName}</h2>
                     <div className="flex items-center gap-1">
-                        <span className="block w-2 h-2 rounded-full bg-green-500"></span>
-                        <p className="text-xs text-gray-500 font-medium">{conversation.is_group ? 'Membres' : 'En ligne'}</p>
+                        {conversation.is_group ? (
+                            <p className="text-xs text-gray-500 dark:text-gray-400 font-medium truncate">Groupe</p>
+                        ) : (
+                            <>
+                                <span className={`block w-2 h-2 rounded-full flex-shrink-0 ${isOnline ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-500'}`}></span>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 font-medium truncate">{isOnline ? 'En ligne' : 'Hors ligne'}</p>
+                            </>
+                        )}
                     </div>
                 </div>
             </div>
-            <div className="flex items-center gap-4 text-orange-700">
-                <Video className="cursor-pointer hover:bg-orange-50 p-2 rounded-full box-content transition-colors" size={20} />
-                <Phone className="cursor-pointer hover:bg-orange-50 p-2 rounded-full box-content transition-colors" size={20} />
-                <MoreVertical className="cursor-pointer hover:bg-orange-50 p-2 rounded-full box-content transition-colors" size={20} />
+            <div className="flex items-center gap-2 md:gap-4 text-orange-700 dark:text-orange-400 flex-shrink-0">
+                <Video className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2 rounded-full box-content transition-colors" size={20} />
+                <Phone className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2 rounded-full box-content transition-colors" size={20} />
+                <MoreVertical className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2 rounded-full box-content transition-colors" size={20} />
             </div>
         </div>
 
@@ -163,18 +201,33 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     />
                 ))
             )}
+            
+            {/* Typing Indicator Bubble */}
+            {typingCount > 0 && (
+                <div className="flex justify-start mb-3 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 rounded-2xl rounded-tl-sm px-4 py-2 text-xs italic shadow-sm flex items-center gap-2">
+                        <div className="flex gap-1">
+                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
+                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
+                        </div>
+                        <span>train d'écrire...</span>
+                    </div>
+                </div>
+            )}
+            
             <div ref={messagesEndRef} />
         </div>
 
         {/* Input Area */}
-        <div className="w-full bg-white px-4 py-3 border-t border-gray-100">
+        <div className="w-full bg-white dark:bg-gray-800 px-4 py-3 border-t border-gray-100 dark:border-gray-700 shrink-0 transition-colors">
             {editingMessage && (
-                <div className="flex items-center justify-between bg-orange-50 px-4 py-2 rounded-t-lg border-l-4 border-orange-500 mb-2">
-                    <div className="flex flex-col">
-                        <span className="text-xs font-bold text-orange-700">Modification du message</span>
-                        <span className="text-xs text-gray-500 truncate max-w-[200px]">{editingMessage.content}</span>
+                <div className="flex items-center justify-between bg-orange-50 dark:bg-orange-900/20 px-4 py-2 rounded-t-lg border-l-4 border-orange-500 mb-2">
+                    <div className="flex flex-col overflow-hidden">
+                        <span className="text-xs font-bold text-orange-700 dark:text-orange-400">Modification du message</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{editingMessage.content}</span>
                     </div>
-                    <button onClick={handleCancelEdit} className="text-gray-400 hover:text-gray-600">
+                    <button onClick={handleCancelEdit} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1">
                         <X size={16} />
                     </button>
                 </div>
@@ -183,9 +236,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 <input
                     type="text"
                     value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
+                    onChange={handleInputChange}
                     placeholder={editingMessage ? "Modifier votre message..." : "Écrivez un message..."}
-                    className={`flex-1 py-3 px-4 rounded-full border focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-gray-50 shadow-inner transition-all ${editingMessage ? 'border-orange-300 ring-2 ring-orange-100' : 'border-gray-200'}`}
+                    className={`flex-1 py-3 px-4 rounded-full border focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-gray-50 dark:bg-gray-700 dark:text-white shadow-inner transition-all ${editingMessage ? 'border-orange-300 ring-2 ring-orange-100 dark:ring-orange-900' : 'border-gray-200 dark:border-gray-600'}`}
                 />
                 <button 
                     type="submit" 

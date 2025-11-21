@@ -13,19 +13,18 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'talkio_super_secret_key_2024';
 
 // --- BASE DE DONNÉES NEON ---
-// Priorité à la variable d'environnement (Prod), fallback sur la string hardcodée (Dev/Test)
 const connectionString = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_XPSO1Fe6aqZk@ep-misty-queen-agi42tnv-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require';
 
 const pool = new Pool({
   connectionString: connectionString,
   ssl: {
-    rejectUnauthorized: false // Nécessaire pour Neon
+    rejectUnauthorized: false
   }
 });
 
 // --- MIDDLEWARE ---
 app.use(cors({
-    origin: "*", // Autorise toutes les origines (Vercel, Localhost)
+    origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 }));
@@ -40,28 +39,60 @@ const io = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
+// --- ONLINE USERS TRACKING ---
+const onlineUsers = new Set();
+
+const notifyFriendsStatus = async (userId, isOnline) => {
+    try {
+        // Find friends (people in same conversations)
+        const res = await pool.query(`
+            SELECT DISTINCT p.user_id 
+            FROM participants p
+            JOIN participants me ON p.conversation_id = me.conversation_id
+            WHERE me.user_id = $1 AND p.user_id != $1
+        `, [userId]);
+        
+        res.rows.forEach(row => {
+            io.to(`user:${row.user_id}`).emit('user_status', { userId, isOnline });
+        });
+    } catch (e) {
+        console.error("Status notify error", e);
+    }
+};
+
 // --- GESTION SOCKETS ---
 io.on('connection', (socket) => {
-  console.log('New socket connection:', socket.id);
+  let currentUserId = null;
 
-  // 1. Auth via Handshake (Connexion initiale)
+  const handleUserAuth = async (userId) => {
+      if (currentUserId === userId) return; // Already auth
+      currentUserId = userId;
+      socket.userId = userId; // Attach to socket instance
+      
+      socket.join(`user:${userId}`);
+      
+      // Mark Online
+      onlineUsers.add(userId);
+      await notifyFriendsStatus(userId, true);
+      console.log(`User ${userId} connected & online`);
+  };
+
+  // Auth via Handshake
   const token = socket.handshake.auth?.token;
   if (token) {
       try {
           const decoded = jwt.verify(token, JWT_SECRET);
-          socket.join(`user:${decoded.id}`);
-          console.log(`User ${decoded.id} auto-authenticated via handshake`);
+          handleUserAuth(decoded.id);
       } catch (e) {
           console.error("Handshake auth failed", e.message);
       }
   }
 
-  // 2. Auth via Event (Reconnect / Login tardif)
+  // Auth via Event
   socket.on('authenticate', (token) => {
       try {
           const decoded = jwt.verify(token, JWT_SECRET);
-          socket.join(`user:${decoded.id}`);
-          console.log(`User ${decoded.id} authenticated via event`);
+          handleUserAuth(decoded.id);
       } catch (e) {
           console.error("Socket event auth failed");
       }
@@ -71,8 +102,27 @@ io.on('connection', (socket) => {
     socket.join(roomId);
   });
 
-  socket.on('disconnect', () => {
-    // Cleanup si nécessaire
+  // Typing Indicators
+  socket.on('typing_start', ({ conversationId }) => {
+      if (!currentUserId) return;
+      socket.to(conversationId).emit('typing_update', { conversationId, userId: currentUserId, isTyping: true });
+  });
+
+  socket.on('typing_stop', ({ conversationId }) => {
+      if (!currentUserId) return;
+      socket.to(conversationId).emit('typing_update', { conversationId, userId: currentUserId, isTyping: false });
+  });
+
+  socket.on('disconnect', async () => {
+      if (currentUserId) {
+          // Check if user has other sockets (tabs) open
+          const sockets = await io.in(`user:${currentUserId}`).fetchSockets();
+          if (sockets.length === 0) {
+              onlineUsers.delete(currentUserId);
+              await notifyFriendsStatus(currentUserId, false);
+              console.log(`User ${currentUserId} offline`);
+          }
+      }
   });
 });
 
@@ -140,9 +190,8 @@ const initDB = async () => {
         console.log("✅ Database Schema Synchronized.");
     } catch (err) {
         console.error("\n❌ FATAL ERROR: Database initialization failed.");
-        console.error("Detail:", err.message);
-        console.error("HINT: Check your 'DATABASE_URL' environment variable in Render settings.\n");
-        process.exit(1); // CRUCIAL: Stop the server so Render restarts it and shows the error
+        console.error(err.message);
+        process.exit(1);
     } finally {
         if (client) client.release();
     }
@@ -161,7 +210,6 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// --- HELPER ---
 const getUserInfo = async (userId) => {
     const res = await pool.query('SELECT id, username, tag FROM users WHERE id = $1', [userId]);
     return res.rows[0];
@@ -169,12 +217,35 @@ const getUserInfo = async (userId) => {
 
 // --- ROUTES ---
 
-// Health Check
-app.get('/', (req, res) => {
-    res.send("Talkio Backend is Running 🚀");
+app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
+
+// === IMPORTANT: ROUTES ORDER MATTERS ===
+// Specific routes MUST be defined before wildcard routes like /:id
+
+// 0. SYSTEM & SPECIFIC USER ROUTES
+app.get('/api/users/online', authenticateToken, (req, res) => {
+    res.json(Array.from(onlineUsers));
 });
 
-// 1. AUTH
+app.get('/api/contacts', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT DISTINCT u.id, u.username, u.tag 
+            FROM participants p1
+            JOIN conversations c ON p1.conversation_id = c.id
+            JOIN participants p2 ON c.id = p2.conversation_id
+            JOIN users u ON p2.user_id = u.id
+            WHERE p1.user_id = $1 
+              AND c.is_group = FALSE
+              AND p2.user_id != $1
+        `, [req.user.id]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 1. AUTH & USER MANAGEMENT
 app.post('/api/auth/register', async (req, res) => {
     let { username, email, password } = req.body;
     if (!username || !email || !password) return res.status(400).json({error: "Champs manquants"});
@@ -185,7 +256,6 @@ app.post('/api/auth/register', async (req, res) => {
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         
-        // Retry logic for unique Tag generation
         let user = null;
         let attempts = 0;
         const MAX_ATTEMPTS = 5;
@@ -198,20 +268,17 @@ app.post('/api/auth/register', async (req, res) => {
                     [username, email, hashedPassword, tag]
                 );
                 user = result.rows[0];
-                break; // Success
+                break;
             } catch (insertErr) {
                  if (insertErr.code === '23505') {
-                     // 23505 = Unique violation.
-                     const constraint = insertErr.constraint || '';
                      const detail = insertErr.detail || '';
-                     
-                     if (constraint.includes('tag') || detail.includes('tag')) {
+                     if (detail.includes('tag')) {
                          attempts++;
-                         continue; // Retry with a new random tag
+                         continue;
                      }
                      throw new Error("EMAIL_EXISTS");
                  } else {
-                     throw insertErr; // Other SQL error
+                     throw insertErr;
                  }
             }
         }
@@ -219,49 +286,36 @@ app.post('/api/auth/register', async (req, res) => {
         if (!user) throw new Error("TAG_RETRY_LIMIT");
         
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
-        
         res.json({ user, token });
     } catch (err) {
         console.error("Register Error:", err);
-        
-        if (err.message === 'EMAIL_EXISTS') { 
-            return res.status(400).json({ error: "Cet email est déjà utilisé." });
-        }
-        
-        if (err.message === 'TAG_RETRY_LIMIT') {
-            return res.status(400).json({ error: "Le serveur est saturé (Tags épuisés), réessayez." });
-        }
-        
-        if (err.code === '23505') {
-             return res.status(400).json({ error: "Cet email ou cet identifiant existe déjà." });
-        }
-        
-        res.status(500).json({ error: "Erreur serveur lors de l'inscription" });
+        if (err.message === 'EMAIL_EXISTS') return res.status(400).json({ error: "Cet email est déjà utilisé." });
+        if (err.message === 'TAG_RETRY_LIMIT') return res.status(400).json({ error: "Serveur saturé, réessayez." });
+        res.status(500).json({ error: "Erreur serveur" });
     }
 });
 
 app.post('/api/auth/login', async (req, res) => {
     let { email, password } = req.body;
-    email = email.toLowerCase().trim(); // Normalize
+    email = email.toLowerCase().trim();
 
     try {
         const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         const user = result.rows[0];
         
         if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-            return res.status(400).json({ error: "Email ou mot de passe incorrect" });
+            return res.status(400).json({ error: "Identifiants incorrects" });
         }
 
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
         delete user.password_hash;
-        
         res.json({ user, token });
     } catch (err) {
-        console.error("Login Error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
+// Wildcard User Route (Must be AFTER specific /users/... routes)
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
     try {
         const user = await getUserInfo(req.params.id);
@@ -273,6 +327,7 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
 });
 
 // 2. CONVERSATIONS
+
 app.get('/api/conversations', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     try {
@@ -315,8 +370,46 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
 
         res.json(validConvs);
     } catch (err) {
-        console.error("Get Conversations Error:", err);
         res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/conversations', authenticateToken, async (req, res) => {
+    const { name, participantIds } = req.body;
+    if (!name || !participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {
+        return res.status(400).json({ error: "Nom et participants requis" });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const convRes = await client.query('INSERT INTO conversations (name, is_group) VALUES ($1, true) RETURNING id', [name]);
+        const convId = convRes.rows[0].id;
+
+        const allUserIds = [...new Set([...participantIds, req.user.id])];
+
+        for (const uid of allUserIds) {
+            await client.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2)', [uid, convId]);
+        }
+
+        await client.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [convId, req.user.id, `📢 Groupe "${name}" créé`]);
+
+        await client.query('COMMIT');
+
+        // Notify all participants immediately
+        allUserIds.forEach(uid => {
+            io.to(`user:${uid}`).emit('conversation_added', { conversationId: convId });
+        });
+
+        res.json({ success: true, conversationId: convId });
+
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error("Create Group Error:", err);
+        res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
     }
 });
 
@@ -382,7 +475,14 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         const sender = await getUserInfo(req.user.id);
         const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
 
+        // Emit to the chat room (for open windows)
         io.to(conversation_id).emit('new_message', fullMsg);
+        
+        // Emit to ALL participants' user rooms (for list updates)
+        const parts = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversation_id]);
+        parts.rows.forEach(row => {
+            io.to(`user:${row.user_id}`).emit('conversation_updated', { conversationId: conversation_id });
+        });
         
         res.json(fullMsg);
     } catch (err) {
@@ -464,35 +564,25 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
             [req.user.id, targetUser.id]
         );
 
-        const areFriends = existing.rows.some(r => r.status === 'accepted');
-        if (areFriends) return res.status(400).json({ error: "Vous êtes déjà amis !" });
-        
-        // --- MUTUAL ADD LOGIC (FIX DEADLOCK) ---
-        // If Target already sent me a request (pending), and I send one back, 
-        // we should just ACCEPT the existing request instead of erroring "Already sent".
-        
+        // Mutual Add Logic
         const reversePending = existing.rows.find(r => r.sender_id === targetUser.id && r.receiver_id === req.user.id && r.status === 'pending');
 
         if (reversePending) {
-            // 1. Update status to accepted
             await pool.query('UPDATE friend_requests SET status = $1 WHERE id = $2', ['accepted', reversePending.id]);
-            
-            // 2. Create Conversation
             const convRes = await pool.query('INSERT INTO conversations (is_group) VALUES (false) RETURNING id');
             const convId = convRes.rows[0].id;
-            
-            // 3. Add Participants
             await pool.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2), ($3, $2)', [req.user.id, convId, targetUser.id]);
-            
-            // 4. System Message
             await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [convId, req.user.id, '👋 Ami accepté mutuellement !']);
             
-            // 5. Notify both
-            io.to(`user:${targetUser.id}`).emit('request_accepted', { conversationId: convId });
-            io.to(`user:${req.user.id}`).emit('request_accepted', { conversationId: convId });
+            // Force Update for both users
+            io.to(`user:${targetUser.id}`).emit('conversation_added', { conversationId: convId });
+            io.to(`user:${req.user.id}`).emit('conversation_added', { conversationId: convId });
 
             return res.json({ success: true, message: "Vous êtes désormais amis !", conversationId: convId });
         }
+
+        const areFriends = existing.rows.some(r => r.status === 'accepted');
+        if (areFriends) return res.status(400).json({ error: "Vous êtes déjà amis !" });
 
         const isPending = existing.rows.some(r => r.status === 'pending');
         if (isPending) return res.status(400).json({ error: "Demande déjà en cours" });
@@ -528,7 +618,6 @@ app.get('/api/friend_requests', authenticateToken, async (req, res) => {
             created_at: r.created_at,
             sender: { id: r.sender_id, username: r.username, tag: r.tag, email: r.email }
         }));
-        
         res.json(requests);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -552,10 +641,12 @@ app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res)
             const convId = convRes.rows[0].id;
             
             await pool.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2), ($3, $2)', [request.sender_id, convId, request.receiver_id]);
-            
             await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [convId, request.receiver_id, '👋 Ami accepté !']);
 
-            io.to(`user:${request.sender_id}`).emit('request_accepted', { conversationId: convId });
+            // Notify both (Sender via Socket, Receiver via Response)
+            io.to(`user:${request.sender_id}`).emit('conversation_added', { conversationId: convId });
+            // Optional redundancy for current user
+            io.to(`user:${request.receiver_id}`).emit('conversation_added', { conversationId: convId });
 
             res.json({ success: true, conversationId: convId });
         } else {
@@ -567,7 +658,6 @@ app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res)
     }
 });
 
-// --- START SERVER ---
 initDB().then(() => {
     server.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);

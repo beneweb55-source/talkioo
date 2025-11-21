@@ -1,65 +1,35 @@
-# Configuration du Backend (Node.js + Prisma + Neon)
+# Configuration du Backend (Node.js + PostgreSQL)
 
-Ce fichier liste les étapes pour initialiser votre serveur Backend qui se connectera à la base de données Neon.
+Ce dossier contient le serveur Backend API + WebSocket pour l'application Talkio.
+Il est conçu pour être hébergé sur **Render**, **Railway** ou tout VPS Node.js.
 
-## 1. Initialisation du projet
+## 1. Structure
 
-Ouvrez votre terminal à la racine du dossier où vous hébergerez le backend (ou dans ce projet si vous utilisez Next.js API Routes) :
+Le serveur utilise :
+- **Express** : Pour l'API REST (Authentification, Messages, Amis).
+- **Socket.io** : Pour le temps réel (Messages instantanés).
+- **pg (node-postgres)** : Pour la connexion directe et performante à la base de données Neon (PostgreSQL).
 
-```bash
-# Initialiser le package.json si ce n'est pas fait
-npm init -y
+## 2. Déploiement sur Render
 
-# Installer Prisma et le Client Prisma
-npm install prisma --save-dev
-npm install @prisma/client
-```
+1. Créez un "Web Service" sur Render connecté à votre repo GitHub.
+2. **Root Directory** : Indiquez `server` (si ce dossier est à la racine de votre repo).
+3. **Build Command** : `npm install`
+4. **Start Command** : `node index.js`
+5. **Variables d'environnement** :
+   Ajoutez une variable `DATABASE_URL` avec votre lien de connexion Neon :
+   `postgresql://neondb_owner:......@ep-misty-....aws.neon.tech/neondb?sslmode=require`
 
-## 2. Configuration de l'environnement
+## 3. Initialisation Automatique
 
-Créez un fichier `.env` à la racine et ajoutez votre URL de connexion Neon (celle commençant par `postgresql://` et finissant par `sslmode=require`).
+Au démarrage, le serveur exécute la fonction `initDB()` qui crée automatiquement les tables SQL nécessaires (`users`, `conversations`, `messages`, etc.) si elles n'existent pas.
 
-```env
-# .env
-DATABASE_URL="postgresql://neondb_owner:npg_XPSO...e-central-1.aws.neon.tech/neondb?sslmode=require"
-```
+Vous n'avez aucune migration manuelle à faire.
 
-> **Sécurité :** Ne commitez jamais ce fichier `.env` sur GitHub. Ajoutez-le à votre `.gitignore`.
+## 4. API Endpoints
 
-## 3. Synchronisation avec la Base de Données
-
-Cette commande va lire le fichier `prisma/schema.prisma` et créer les tables (users, conversations, etc.) dans votre base de données Neon.
-
-```bash
-npx prisma db push
-```
-
-## 4. Génération du Client
-
-Générez le client TypeScript pour pouvoir utiliser `prisma.user.findMany()` etc. dans votre code.
-
-```bash
-npx prisma generate
-```
-
-## 5. Utilisation (Exemple)
-
-Dans vos fichiers API (ex: `pages/api/auth/register.ts` ou `server.js`) :
-
-```javascript
-import { PrismaClient } from '@prisma/client';
-const prisma = new PrismaClient();
-
-// Exemple : Créer un user
-async function main() {
-  const newUser = await prisma.user.create({
-    data: {
-      username: 'Alice',
-      tag: '1234',
-      email: 'alice@test.com',
-      password_hash: 'hash_securise_ici'
-    }
-  });
-  console.log(newUser);
-}
-```
+- `POST /api/auth/register` : Inscription
+- `POST /api/auth/login` : Connexion
+- `GET /api/conversations` : Liste des chats
+- `POST /api/messages` : Envoyer un message
+- `POST /api/friend_requests` : Demander un ami

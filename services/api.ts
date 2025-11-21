@@ -1,19 +1,52 @@
-import { io } from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 import { User, Conversation, Message, AuthResponse, FriendRequest } from '../types';
 
-// POINTING TO YOUR LOCAL NODE SERVER
-const API_URL = 'http://localhost:3001/api';
-const SOCKET_URL = 'http://localhost:3001';
+// --- CONFIGURATION DYNAMIQUE ---
 
-// Socket Instance
-const socket = io(SOCKET_URL, {
-    autoConnect: false
-});
+// 1. Si on est en local (localhost), on tape sur le serveur local (3001)
+// 2. Si on est sur Vercel (Production), on doit taper sur l'URL du Backend hébergé (Render/Railway)
+const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-// Helper for fetch with Auth header
+// 🚨 URL DE PRODUCTION (Render)
+const PROD_BACKEND_URL = 'https://talkioo.onrender.com';
+
+const API_BASE = isLocal ? 'http://localhost:3001' : PROD_BACKEND_URL;
+const API_URL = `${API_BASE}/api`;
+
+console.log(`[Talkio] Connecting to Backend: ${API_BASE}`);
+
+// --- SOCKET INSTANCE ---
+let socket: Socket;
+
+export const connectSocket = (token: string) => {
+    if (socket && socket.connected) return;
+    
+    socket = io(API_BASE, {
+        auth: { token },
+        transports: ['websocket', 'polling'], // Polling en backup pour Vercel/Firewalls
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+    });
+
+    socket.on('connect', () => {
+        console.log('Socket connected:', socket.id);
+        // Join personal user channel for notifications
+        socket.emit('authenticate', token);
+    });
+
+    socket.on('connect_error', (err) => {
+        console.error("Socket Connection Error:", err);
+    });
+};
+
+export const disconnectSocket = () => {
+    if (socket) socket.disconnect();
+};
+
+// --- API HELPER ---
 const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
     const token = localStorage.getItem('talkio_auth_token');
-    const headers = {
+    const headers: HeadersInit = {
         'Content-Type': 'application/json',
         ...(token ? { 'Authorization': `Bearer ${token}` } : {})
     };
@@ -24,14 +57,15 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
             headers: { ...headers, ...options.headers }
         });
         
+        const data = await response.json();
+        
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Erreur API');
+            throw new Error(data.error || 'Erreur API');
         }
         
-        return await response.json();
-    } catch (error) {
-        console.error(`API Error (${endpoint}):`, error);
+        return data;
+    } catch (error: any) {
+        console.error(`API Error (${endpoint}):`, error.message);
         throw error;
     }
 };
@@ -39,32 +73,17 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
 // --- AUTH ---
 
 export const registerAPI = async (username: string, email: string, password: string): Promise<AuthResponse> => {
-    const data = await fetchWithAuth('/auth/register', {
+    return await fetchWithAuth('/auth/register', {
         method: 'POST',
         body: JSON.stringify({ username, email, password })
     });
-    
-    // Auto connect socket on auth
-    if(data.user) {
-        socket.auth = { token: data.token };
-        socket.connect();
-        socket.emit('join_user_channel', data.user.id);
-    }
-    return data;
 };
 
 export const loginAPI = async (email: string, password: string): Promise<AuthResponse> => {
-    const data = await fetchWithAuth('/auth/login', {
+    return await fetchWithAuth('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password })
     });
-    
-    if(data.user) {
-        socket.auth = { token: data.token };
-        socket.connect();
-        socket.emit('join_user_channel', data.user.id);
-    }
-    return data;
 };
 
 export const getUserByIdAPI = async (id: string): Promise<User | undefined> => {
@@ -144,37 +163,35 @@ export const respondToFriendRequestAPI = async (requestId: string, status: 'acce
     });
     
     if (status === 'accepted' && res.conversationId) {
-        return { id: res.conversationId } as Conversation; // Partial mock return, will refresh anyway
+        return { id: res.conversationId } as Conversation;
     }
     return null;
 };
 
-// --- SOCKET SUBSCRIPTIONS ---
+// --- REALTIME SUBSCRIPTIONS ---
 
 export const subscribeToMessages = (conversationId: string, onMessage: (msg: Message) => void) => {
-    // Join the room
+    if (!socket) return () => {};
+    
     socket.emit('join_room', conversationId);
 
-    const handleNew = (msg: Message) => {
-        if (msg.conversation_id === conversationId) onMessage(msg);
+    const handler = (msg: Message) => {
+        if (msg.conversation_id === conversationId) {
+            onMessage(msg);
+        }
     };
 
-    const handleUpdate = (msg: Message) => {
-        if (msg.conversation_id === conversationId) onMessage(msg);
-    };
-
-    socket.on('new_message', handleNew);
-    socket.on('message_update', handleUpdate);
+    socket.on('new_message', handler);
+    socket.on('message_update', handler);
 
     return () => {
-        socket.off('new_message', handleNew);
-        socket.off('message_update', handleUpdate);
+        socket.off('new_message', handler);
+        socket.off('message_update', handler);
     };
 };
 
 export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {
-    // Make sure we are in user channel
-    socket.emit('join_user_channel', userId);
+    if (!socket) return () => {};
     
     const handler = () => onNewRequest();
     socket.on('friend_request', handler);
@@ -183,12 +200,16 @@ export const subscribeToFriendRequests = (userId: string, onNewRequest: () => vo
 };
 
 export const subscribeToConversationsList = (onUpdate: () => void) => {
-    // For MVP, we reuse message events to trigger list updates
+    if (!socket) return () => {};
+
     const handler = () => onUpdate();
     socket.on('new_message', handler);
     socket.on('message_update', handler);
+    socket.on('request_accepted', handler);
+    
     return () => {
         socket.off('new_message', handler);
         socket.off('message_update', handler);
+        socket.off('request_accepted', handler);
     };
 };

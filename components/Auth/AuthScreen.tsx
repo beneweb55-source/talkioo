@@ -1,15 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { loginAPI, registerAPI } from '../../services/api';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { MessageCircleCode } from 'lucide-react';
+import { MessageCircleCode, CloudLightning } from 'lucide-react';
 
 export const AuthScreen: React.FC = () => {
   const { login } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showWakeUpMessage, setShowWakeUpMessage] = useState(false);
 
   // Form State
   const [email, setEmail] = useState('');
@@ -20,6 +21,12 @@ export const AuthScreen: React.FC = () => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    setShowWakeUpMessage(false);
+
+    // Si la requête prend plus de 2 secondes, c'est probablement que Render se réveille
+    const wakeUpTimer = setTimeout(() => {
+        setShowWakeUpMessage(true);
+    }, 2500);
 
     try {
       if (isLogin) {
@@ -32,7 +39,9 @@ export const AuthScreen: React.FC = () => {
     } catch (err: any) {
       setError(err.message || 'Une erreur est survenue');
     } finally {
+      clearTimeout(wakeUpTimer);
       setLoading(false);
+      setShowWakeUpMessage(false);
     }
   };
 
@@ -83,9 +92,19 @@ export const AuthScreen: React.FC = () => {
             />
 
             {error && (
-              <div className="text-red-600 text-sm bg-red-50 p-3 rounded-md border border-red-100">
+              <div className="text-red-600 text-sm bg-red-50 p-3 rounded-md border border-red-100 animate-in fade-in">
                 {error}
               </div>
+            )}
+
+            {/* Message Spécial Serveur Render */}
+            {showWakeUpMessage && (
+                <div className="text-blue-600 text-sm bg-blue-50 p-3 rounded-md border border-blue-100 flex items-start gap-2 animate-in fade-in">
+                    <CloudLightning className="flex-shrink-0 mt-0.5" size={18} />
+                    <span>
+                        Le serveur sort de veille, cela peut prendre environ 30 secondes. Merci de patienter... 🚀
+                    </span>
+                </div>
             )}
 
             <div className="pt-4">
@@ -113,6 +132,7 @@ export const AuthScreen: React.FC = () => {
                 onClick={() => {
                   setIsLogin(!isLogin);
                   setError('');
+                  setShowWakeUpMessage(false);
                 }}
               >
                 {isLogin ? 'Créer un compte' : 'J\'ai déjà un compte'}

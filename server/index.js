@@ -1,0 +1,509 @@
+const express = require('express');
+const { Pool } = require('pg');
+const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+// --- CONFIGURATION ---
+const app = express();
+const server = http.createServer(app);
+const PORT = process.env.PORT || 3001; 
+const JWT_SECRET = process.env.JWT_SECRET || 'talkio_super_secret_key_2024';
+
+// --- BASE DE DONNÉES NEON ---
+// Priorité à la variable d'environnement (Prod), fallback sur la string hardcodée (Dev/Test)
+const connectionString = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_XPSO1Fe6aqZk@ep-misty-queen-agi42tnv-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require';
+
+const pool = new Pool({
+  connectionString: connectionString,
+  ssl: {
+    rejectUnauthorized: false // Nécessaire pour Neon
+  }
+});
+
+// --- MIDDLEWARE ---
+app.use(cors({
+    origin: "*", // Autorise toutes les origines (Vercel, Localhost)
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+}));
+app.use(express.json());
+
+// --- SOCKET.IO SETUP ---
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  },
+  transports: ['websocket', 'polling']
+});
+
+// --- GESTION SOCKETS ---
+io.on('connection', (socket) => {
+  console.log('New socket connection:', socket.id);
+
+  // 1. Auth via Handshake (Connexion initiale)
+  // Permet d'authentifier l'utilisateur dès la connexion s'il envoie le token
+  const token = socket.handshake.auth?.token;
+  if (token) {
+      try {
+          const decoded = jwt.verify(token, JWT_SECRET);
+          socket.join(`user:${decoded.id}`);
+          console.log(`User ${decoded.id} auto-authenticated via handshake`);
+      } catch (e) {
+          console.error("Handshake auth failed", e.message);
+      }
+  }
+
+  // 2. Auth via Event (Reconnect / Login tardif)
+  socket.on('authenticate', (token) => {
+      try {
+          const decoded = jwt.verify(token, JWT_SECRET);
+          socket.join(`user:${decoded.id}`);
+          console.log(`User ${decoded.id} authenticated via event`);
+      } catch (e) {
+          console.error("Socket event auth failed");
+      }
+  });
+
+  socket.on('join_room', (roomId) => {
+    socket.join(roomId);
+    // console.log(`Socket ${socket.id} joined room ${roomId}`);
+  });
+
+  socket.on('disconnect', () => {
+    // Cleanup si nécessaire
+  });
+});
+
+// --- DATABASE INITIALIZATION ---
+const initDB = async () => {
+    const client = await pool.connect();
+    try {
+        console.log("Checking Database Schema...");
+        
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                username VARCHAR(50) NOT NULL,
+                tag VARCHAR(4) NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(username, tag)
+            );
+        `);
+
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS conversations (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name VARCHAR(100),
+                is_group BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS participants (
+                user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_deleted_at TIMESTAMP,
+                PRIMARY KEY (user_id, conversation_id)
+            );
+        `);
+
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS messages (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+                sender_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP,
+                deleted_at TIMESTAMP
+            );
+        `);
+
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS friend_requests (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                sender_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                receiver_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                status VARCHAR(20) DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        
+        console.log("Database Schema Synchronized.");
+    } catch (err) {
+        console.error("Error initializing DB:", err);
+    } finally {
+        client.release();
+    }
+};
+
+// --- AUTH MIDDLEWARE ---
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+// --- HELPER ---
+const getUserInfo = async (userId) => {
+    const res = await pool.query('SELECT id, username, tag FROM users WHERE id = $1', [userId]);
+    return res.rows[0];
+};
+
+// --- ROUTES ---
+
+// Health Check
+app.get('/', (req, res) => {
+    res.send("Talkio Backend is Running 🚀");
+});
+
+// 1. AUTH
+app.post('/api/auth/register', async (req, res) => {
+    const { username, email, password } = req.body;
+    if (!username || !email || !password) return res.status(400).json({error: "Champs manquants"});
+
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const tag = Math.floor(1000 + Math.random() * 9000).toString();
+        
+        const result = await pool.query(
+            'INSERT INTO users (username, email, password_hash, tag) VALUES ($1, $2, $3, $4) RETURNING id, username, tag, email, created_at',
+            [username, email, hashedPassword, tag]
+        );
+        
+        const user = result.rows[0];
+        const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
+        
+        res.json({ user, token });
+    } catch (err) {
+        console.error("Register Error:", err);
+        if (err.code === '23505') { 
+            return res.status(400).json({ error: "Cet email est déjà utilisé." });
+        }
+        res.status(500).json({ error: "Erreur serveur" });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    const { email, password } = req.body;
+    try {
+        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        const user = result.rows[0];
+        
+        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+            return res.status(400).json({ error: "Email ou mot de passe incorrect" });
+        }
+
+        const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
+        delete user.password_hash;
+        
+        res.json({ user, token });
+    } catch (err) {
+        console.error("Login Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/users/:id', authenticateToken, async (req, res) => {
+    try {
+        const user = await getUserInfo(req.params.id);
+        if(!user) return res.status(404).json({error: "User not found"});
+        res.json(user);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2. CONVERSATIONS
+app.get('/api/conversations', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    try {
+        const query = `
+            SELECT c.*, p.last_deleted_at
+            FROM conversations c
+            JOIN participants p ON c.id = p.conversation_id
+            WHERE p.user_id = $1
+        `;
+        const { rows: conversations } = await pool.query(query, [userId]);
+        
+        const enriched = await Promise.all(conversations.map(async (conv) => {
+            const msgRes = await pool.query(`
+                SELECT content, created_at, deleted_at 
+                FROM messages 
+                WHERE conversation_id = $1 
+                ORDER BY created_at DESC LIMIT 1
+            `, [conv.id]);
+            
+            const lastMsg = msgRes.rows[0];
+            
+            // Si la conversation a été supprimée APRÈS le dernier message, on ne l'affiche pas
+            if (conv.last_deleted_at && lastMsg && new Date(conv.last_deleted_at) > new Date(lastMsg.created_at)) {
+                return null; 
+            }
+            // Si pas de messages et supprimée, on ne l'affiche pas
+            if (!lastMsg && conv.last_deleted_at) return null;
+
+            return {
+                id: conv.id,
+                name: conv.name,
+                is_group: conv.is_group,
+                created_at: conv.created_at,
+                last_message: lastMsg ? (lastMsg.deleted_at ? "🚫 Message supprimé" : lastMsg.content) : "Nouvelle discussion",
+                last_message_at: lastMsg ? lastMsg.created_at : conv.created_at
+            };
+        }));
+
+        const validConvs = enriched.filter(Boolean).sort((a, b) => 
+            new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
+        );
+
+        res.json(validConvs);
+    } catch (err) {
+        console.error("Get Conversations Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
+    try {
+        await pool.query(
+            'UPDATE participants SET last_deleted_at = NOW() WHERE conversation_id = $1 AND user_id = $2',
+            [req.params.id, req.user.id]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT u.id, u.username, u.tag, u.email 
+            FROM participants p 
+            JOIN users u ON p.user_id = u.id 
+            WHERE p.conversation_id = $1 AND p.user_id != $2
+            LIMIT 1
+        `, [req.params.id, req.user.id]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 3. MESSAGES
+app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT m.*, u.username, u.tag 
+            FROM messages m
+            LEFT JOIN users u ON m.sender_id = u.id
+            WHERE m.conversation_id = $1
+            ORDER BY m.created_at ASC
+        `, [req.params.id]);
+        
+        const messages = result.rows.map(m => ({
+            ...m,
+            sender_username: m.username ? `${m.username}#${m.tag}` : 'Inconnu'
+        }));
+        res.json(messages);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/messages', authenticateToken, async (req, res) => {
+    const { conversation_id, content } = req.body;
+    try {
+        const result = await pool.query(
+            'INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3) RETURNING *',
+            [conversation_id, req.user.id, content]
+        );
+        const msg = result.rows[0];
+
+        // Si la conversation était "supprimée" pour quelqu'un, le nouveau message la fait réapparaître
+        await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
+
+        const sender = await getUserInfo(req.user.id);
+        const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
+
+        // Emission Temps Réel
+        io.to(conversation_id).emit('new_message', fullMsg);
+        
+        res.json(fullMsg);
+    } catch (err) {
+        console.error("Send Message Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/messages/:id', authenticateToken, async (req, res) => {
+    const { content } = req.body;
+    try {
+        const check = await pool.query('SELECT sender_id, conversation_id FROM messages WHERE id = $1', [req.params.id]);
+        if (check.rows.length === 0) return res.status(404).json({error: "Not found"});
+        if (check.rows[0].sender_id !== req.user.id) return res.status(403).json({error: "Unauthorized"});
+
+        const conversation_id = check.rows[0].conversation_id;
+
+        const result = await pool.query(
+            'UPDATE messages SET content = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+            [content, req.params.id]
+        );
+        const msg = result.rows[0];
+        
+        const sender = await getUserInfo(msg.sender_id);
+        const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
+
+        io.to(conversation_id).emit('message_update', fullMsg);
+        res.json(fullMsg);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
+    try {
+        const check = await pool.query('SELECT sender_id, conversation_id FROM messages WHERE id = $1', [req.params.id]);
+        if (check.rows.length === 0) return res.status(404).json({error: "Not found"});
+        if (check.rows[0].sender_id !== req.user.id) return res.status(403).json({error: "Unauthorized"});
+
+        const conversation_id = check.rows[0].conversation_id;
+
+        const result = await pool.query(
+            'UPDATE messages SET deleted_at = NOW() WHERE id = $1 RETURNING *',
+            [req.params.id]
+        );
+        const msg = result.rows[0];
+        
+        const sender = await getUserInfo(msg.sender_id);
+        const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
+
+        io.to(conversation_id).emit('message_update', fullMsg);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 4. FRIEND REQUESTS
+app.post('/api/friend_requests', authenticateToken, async (req, res) => {
+    const { targetIdentifier } = req.body; 
+    if (!targetIdentifier || !targetIdentifier.includes('#')) return res.status(400).json({ error: "Format 'Nom#1234' requis" });
+
+    const parts = targetIdentifier.split('#');
+    const usernameTarget = parts[0].trim();
+    const tagTarget = parts[1].trim();
+
+    try {
+        const userRes = await pool.query(
+            'SELECT id FROM users WHERE LOWER(username) = LOWER($1) AND tag = $2', 
+            [usernameTarget, tagTarget]
+        );
+        const targetUser = userRes.rows[0];
+        
+        if (!targetUser) return res.status(404).json({ error: "Utilisateur introuvable" });
+        if (targetUser.id === req.user.id) return res.status(400).json({ error: "Impossible de s'ajouter soi-même" });
+
+        const existing = await pool.query(
+            'SELECT * FROM friend_requests WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)',
+            [req.user.id, targetUser.id]
+        );
+
+        const areFriends = existing.rows.some(r => r.status === 'accepted');
+        if (areFriends) return res.status(400).json({ error: "Vous êtes déjà amis !" });
+        
+        const isPending = existing.rows.some(r => r.status === 'pending');
+        if (isPending) return res.status(400).json({ error: "Demande déjà en cours" });
+
+        const newReq = await pool.query(
+            'INSERT INTO friend_requests (sender_id, receiver_id) VALUES ($1, $2) RETURNING *',
+            [req.user.id, targetUser.id]
+        );
+
+        // Notifier l'utilisateur cible en temps réel
+        io.to(`user:${targetUser.id}`).emit('friend_request', newReq.rows[0]);
+        res.json({ success: true });
+
+    } catch (err) {
+        console.error("Friend Req Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/friend_requests', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT r.*, u.username, u.tag, u.email 
+            FROM friend_requests r 
+            JOIN users u ON r.sender_id = u.id 
+            WHERE r.receiver_id = $1 AND r.status = 'pending'
+        `, [req.user.id]);
+        
+        const requests = result.rows.map(r => ({
+            id: r.id,
+            sender_id: r.sender_id,
+            receiver_id: r.receiver_id,
+            status: r.status,
+            created_at: r.created_at,
+            sender: { id: r.sender_id, username: r.username, tag: r.tag, email: r.email }
+        }));
+        
+        res.json(requests);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res) => {
+    const { status } = req.body; 
+    try {
+        const result = await pool.query(
+            'UPDATE friend_requests SET status = $1 WHERE id = $2 RETURNING *',
+            [status, req.params.id]
+        );
+        
+        if (result.rows.length === 0) return res.status(404).json({error: "Demande introuvable"});
+
+        const request = result.rows[0];
+        
+        if (status === 'accepted') {
+            const convRes = await pool.query('INSERT INTO conversations (is_group) VALUES (false) RETURNING id');
+            const convId = convRes.rows[0].id;
+            
+            await pool.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2), ($3, $2)', [request.sender_id, convId, request.receiver_id]);
+            
+            await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [convId, request.receiver_id, '👋 Ami accepté !']);
+
+            io.to(`user:${request.sender_id}`).emit('request_accepted', { conversationId: convId });
+
+            res.json({ success: true, conversationId: convId });
+        } else {
+            res.json({ success: true });
+        }
+    } catch (err) {
+        console.error("Respond Req Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- START SERVER ---
+initDB().then(() => {
+    server.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+});

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
-import { getUserByIdAPI } from '../services/api';
+import { getUserByIdAPI, connectSocket, disconnectSocket } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
@@ -28,8 +28,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                   if (foundUser) {
                       setUser(foundUser);
                       setToken(storedToken);
+                      // Reconnect Socket
+                      connectSocket(storedToken);
                   } else {
-                      // User not found in API (maybe deleted or token invalid)
                       throw new Error("User not found");
                   }
               } catch (e) {
@@ -48,6 +49,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem('talkio_auth_token', authToken);
     setUser(userData);
     setToken(authToken);
+    connectSocket(authToken);
   };
 
   const logout = () => {
@@ -55,6 +57,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     localStorage.removeItem('talkio_auth_token');
     setUser(null);
     setToken(null);
+    disconnectSocket();
   };
 
   return (

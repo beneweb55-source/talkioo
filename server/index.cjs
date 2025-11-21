@@ -76,8 +76,6 @@ app.post('/api/auth/register', async (req, res) => {
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         
-        // Fix for registration error: ensuring tag uniqueness might be needed here, 
-        // but for now, we rely on the DB UNIQUE constraint (username, tag).
         const tag = Math.floor(1000 + Math.random() * 9000).toString();
         
         const result = await pool.query(
@@ -91,7 +89,6 @@ app.post('/api/auth/register', async (req, res) => {
         res.json({ user, token });
     } catch (err) {
         console.error(err);
-        // Improved error message logic is highly recommended here, but keeping original for now
         res.status(400).json({ error: "Erreur inscription (Email déjà pris ?)" });
     }
 });
@@ -121,7 +118,6 @@ app.post('/api/auth/login', async (req, res) => {
 // CORRECTION DE L'ERREUR UUID: "online" n'est plus interprété comme un ID
 app.get('/api/users/online', authenticateToken, async (req, res) => {
     try {
-        // Ajout de is_online dans la sélection
         const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE is_online = TRUE');
         res.json(result.rows);
     } catch (err) {
@@ -131,10 +127,9 @@ app.get('/api/users/online', authenticateToken, async (req, res) => {
 });
 
 
-// ROUTE EXISTANTE (2/2) : Récupère un utilisateur par ID
+// ROUTE EXISTANTE (2/2) : Récupère un utilisateur par ID (doit venir après /api/users/online)
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
     try {
-        // Ajout de is_online dans la sélection
         const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE id = $1', [req.params.id]);
         res.json(result.rows[0]);
     } catch (err) {
@@ -165,7 +160,6 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
         
         const result = await pool.query(query, [userId]);
         
-        // Renvoyer la liste complète des amis (contacts)
         res.json(result.rows);
     } catch (err) {
         console.error("Erreur lors de la récupération des contacts:", err);
@@ -175,11 +169,66 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
 
 
 // 2. CONVERSATIONS
+
+// NOUVEAU: Création d'une conversation (groupe ou chat privé)
+// CORRECTION DE L'ERREUR 404 sur POST /api/conversations (Création de groupe)
+app.post('/api/conversations', authenticateToken, async (req, res) => {
+    const { name, participantIds } = req.body; // name est optionnel (groupes), participantIds est un tableau d'UUID
+    const userId = req.user.id;
+
+    if (!participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {
+        return res.status(400).json({ error: "Les identifiants des participants sont requis." });
+    }
+
+    try {
+        const is_group = participantIds.length > 1 || (name && name.length > 0);
+
+        // 1. Créer la conversation
+        const convRes = await pool.query(
+            'INSERT INTO conversations (name, is_group) VALUES ($1, $2) RETURNING id',
+            [is_group ? name : null, is_group]
+        );
+        const conversationId = convRes.rows[0].id;
+
+        // 2. Préparer les valeurs pour les participants
+        const allParticipants = [...new Set([...participantIds, userId])];
+        
+        let participantValues = [];
+        let participantPlaceholders = [];
+        
+        for (let i = 0; i < allParticipants.length; i++) {
+            participantPlaceholders.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
+            participantValues.push(allParticipants[i], conversationId);
+        }
+
+        // 3. Ajouter les participants
+        const participantsQuery = `
+            INSERT INTO participants (user_id, conversation_id) 
+            VALUES ${participantPlaceholders.join(', ')} 
+            RETURNING *
+        `;
+        
+        await pool.query(participantsQuery, participantValues);
+        
+        // 4. Envoyer un message système (facultatif)
+        await pool.query(
+             'INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)',
+             [conversationId, userId, is_group ? `👋 Le groupe "${name}" a été créé !` : '👋 Nouvelle discussion privée.']
+        );
+        
+        // 5. Notifier les autres utilisateurs via Socket.IO (TODO)
+
+        res.status(201).json({ conversationId, name: is_group ? name : null, is_group, participants: allParticipants });
+
+    } catch (err) {
+        console.error("Erreur lors de la création de la conversation:", err);
+        res.status(500).json({ error: "Erreur serveur interne lors de la création." });
+    }
+});
+
 app.get('/api/conversations', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     try {
-        // Complex query to get conversations, last message, and handle soft delete
-        // In a real app, this might be split or optimized with a view
         const query = `
             SELECT c.*, 
                    p.last_deleted_at,
@@ -193,11 +242,10 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
         `;
         const result = await pool.query(query, [userId]);
         
-        // Filter Soft Delete logic in JS for simplicity (or could be in WHERE clause)
         const enriched = result.rows.filter(row => {
-            if (!row.last_message_time) return true; // Keep empty convs
-            if (!row.last_deleted_at) return true; // Never deleted
-            return new Date(row.last_message_time) > new Date(row.last_deleted_at); // New message arrived
+            if (!row.last_message_time) return true;
+            if (!row.last_deleted_at) return true;
+            return new Date(row.last_message_time) > new Date(row.last_deleted_at);
         }).map(row => ({
             id: row.id,
             name: row.name,
@@ -227,7 +275,6 @@ app.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
 
 app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     try {
-        // Ajout de is_online dans la sélection
         const result = await pool.query(`
             SELECT u.id, u.username, u.tag, u.email, u.is_online
             FROM participants p 

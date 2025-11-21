@@ -33,19 +33,18 @@ const io = new Server(server, {
 
 io.on('connection', async (socket) => { 
     // Assumes the Frontend sends the userId in the handshake query
-    // Example Frontend connection: const socket = io(SERVER_URL, { query: { userId: currentUserId } });
     const userId = socket.handshake.query.userId; 
     console.log('User connected:', socket.id, 'User ID:', userId);
 
     if (userId) {
         try {
-            // METTRE À JOUR LE STATUT EN LIGNE (Correction du TODO)
+            // METTRE À JOUR LE STATUT EN LIGNE
             await pool.query(
                 'UPDATE users SET is_online = TRUE, socket_id = $1 WHERE id = $2',
                 [socket.id, userId]
             );
             
-            // Notifier le changement de statut à tous (important pour que les amis voient le statut)
+            // Notifier le changement de statut à tous
             io.emit('USER_STATUS_UPDATE', { userId: userId, isOnline: true }); 
             
             socket.join(`user:${userId}`);
@@ -72,7 +71,7 @@ io.on('connection', async (socket) => {
             const disconnectedUserId = userRes.rows[0]?.id;
 
             if (disconnectedUserId) {
-                // METTRE À JOUR LE STATUT HORS LIGNE (Correction du TODO)
+                // METTRE À JOUR LE STATUT HORS LIGNE
                 await pool.query(
                     'UPDATE users SET is_online = FALSE, socket_id = NULL WHERE id = $1',
                     [disconnectedUserId]
@@ -146,7 +145,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 
-// NOUVELLE ROUTE (1/2) : Récupère tous les utilisateurs en ligne (DOIT ÊTRE EN PREMIER)
+// NOUVELLE ROUTE (1/2) : Récupère tous les utilisateurs en ligne
 app.get('/api/users/online', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE is_online = TRUE');
@@ -303,6 +302,53 @@ app.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
     }
 });
 
+// NOUVELLE ROUTE : Marquer tous les messages d'une conversation comme lus
+app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
+    const conversationId = req.params.id;
+    const userId = req.user.id;
+    
+    try {
+        // 1. Trouver tous les messages dans la conversation que cet utilisateur n'a PAS encore lus.
+        const messagesToReadRes = await pool.query(`
+            SELECT m.id 
+            FROM messages m
+            LEFT JOIN message_reads mr ON mr.message_id = m.id AND mr.user_id = $1
+            WHERE m.conversation_id = $2 AND m.sender_id != $1 AND mr.message_id IS NULL
+            ORDER BY m.created_at DESC
+        `, [userId, conversationId]);
+
+        const messageIds = messagesToReadRes.rows.map(row => row.id);
+
+        if (messageIds.length > 0) {
+            // 2. Préparer l'insertion des enregistrements de lecture
+            const readValues = [];
+            const readPlaceholders = [];
+            for (let i = 0; i < messageIds.length; i++) {
+                readPlaceholders.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
+                readValues.push(messageIds[i], userId);
+            }
+
+            const readQuery = `
+                INSERT INTO message_reads (message_id, user_id) 
+                VALUES ${readPlaceholders.join(', ')}
+                ON CONFLICT (message_id, user_id) DO NOTHING
+            `;
+
+            await pool.query(readQuery, readValues);
+
+            // 3. Notifier TOUS les clients de cette conversation que le statut de lecture a changé
+            // Le frontend devra ré-interroger la liste des messages ou mettre à jour son état local.
+            io.to(conversationId).emit('READ_RECEIPT_UPDATE', { conversationId: conversationId, readerId: userId });
+        }
+        
+        res.json({ success: true, count: messageIds.length });
+
+    } catch (err) {
+        console.error("Erreur lors de la mise à jour du statut de lecture:", err);
+        res.status(500).json({ error: "Erreur serveur lors de la mise à jour de la lecture." });
+    }
+});
+
 app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
@@ -319,19 +365,32 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
 });
 
 // 3. MESSAGES
+// MODIFICATION : Ajout du COUNT des lectures
 app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
+    const conversationId = req.params.id;
+    const userId = req.user.id;
+    
     try {
         const result = await pool.query(`
-            SELECT m.*, u.username, u.tag 
+            SELECT 
+                m.*, 
+                u.username, 
+                u.tag,
+                (
+                    SELECT COUNT(*) 
+                    FROM message_reads mr 
+                    WHERE mr.message_id = m.id AND mr.user_id != $2
+                ) AS read_count
             FROM messages m
             LEFT JOIN users u ON m.sender_id = u.id
             WHERE m.conversation_id = $1
             ORDER BY m.created_at ASC
-        `, [req.params.id]);
+        `, [conversationId, userId]);
         
         const messages = result.rows.map(m => ({
             ...m,
-            sender_username: m.username ? `${m.username}#${m.tag}` : 'Inconnu'
+            sender_username: m.username ? `${m.username}#${m.tag}` : 'Inconnu',
+            read_count: parseInt(m.read_count) // Convertir le count en nombre entier
         }));
         res.json(messages);
     } catch (err) {
@@ -348,13 +407,21 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         );
         const msg = result.rows[0];
 
+        // Après l'insertion du message, marquer le message comme lu par l'expéditeur
+        await pool.query(
+            'INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT (message_id, user_id) DO NOTHING',
+            [msg.id, req.user.id]
+        );
+
         // Reset soft delete for everyone in conversation
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
 
         // Get sender info
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [req.user.id]);
         const sender = userRes.rows[0];
-        const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
+        
+        // Inclure read_count = 1 (lu par l'expéditeur lui-même)
+        const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}`, read_count: 1 }; 
 
         // Socket Broadcast
         io.to(conversation_id).emit('new_message', fullMsg);
@@ -376,7 +443,14 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         // Get sender info for consistency
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
-        const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
+        // Récupérer le compte de lecture actuel pour l'envoyer
+        const readCountRes = await pool.query('SELECT COUNT(*) FROM message_reads WHERE message_id = $1 AND user_id != $2', [msg.id, req.user.id]);
+
+        const fullMsg = { 
+            ...msg, 
+            sender_username: `${sender.username}#${sender.tag}`,
+            read_count: parseInt(readCountRes.rows[0].count)
+        };
 
         io.to(msg.conversation_id).emit('message_update', fullMsg);
         res.json(fullMsg);

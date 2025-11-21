@@ -46,8 +46,8 @@ export const AuthScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md">
+    <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-6 sm:px-6 lg:px-8">
+      <div className="sm:mx-auto sm:w-full sm:max-w-md mb-6">
         <div className="flex justify-center">
             <div className="h-14 w-14 bg-orange-600 rounded-xl shadow-lg flex items-center justify-center transform rotate-3 hover:rotate-0 transition-transform duration-300">
                 <MessageCircleCode className="text-white" size={32} />
@@ -61,9 +61,9 @@ export const AuthScreen: React.FC = () => {
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow-xl shadow-orange-100/50 sm:rounded-lg sm:px-10 border border-gray-100">
-          <form className="space-y-2" onSubmit={handleSubmit}>
+      <div className="sm:mx-auto sm:w-full sm:max-w-md w-full px-4">
+        <div className="bg-white py-8 px-6 shadow-xl shadow-orange-100/50 rounded-2xl sm:px-10 border border-gray-100">
+          <form className="space-y-4" onSubmit={handleSubmit}>
             {!isLogin && (
               <Input
                 label="Nom d'utilisateur"
@@ -107,8 +107,8 @@ export const AuthScreen: React.FC = () => {
                 </div>
             )}
 
-            <div className="pt-4">
-              <Button type="submit" isLoading={loading} className="bg-orange-600 hover:bg-orange-700 focus:ring-orange-500">
+            <div className="pt-2">
+              <Button type="submit" isLoading={loading} className="bg-orange-600 hover:bg-orange-700 focus:ring-orange-500 py-3">
                 {isLogin ? 'Se connecter' : "S'inscrire"}
               </Button>
             </div>
@@ -134,6 +134,7 @@ export const AuthScreen: React.FC = () => {
                   setError('');
                   setShowWakeUpMessage(false);
                 }}
+                className="py-3"
               >
                 {isLogin ? 'Créer un compte' : 'J\'ai déjà un compte'}
               </Button>

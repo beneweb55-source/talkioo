@@ -46,10 +46,13 @@ io.on('connection', (socket) => {
 
   // 1. Auth via Handshake (Connexion initiale)
   const token = socket.handshake.auth?.token;
+  let currentUserId = null;
+
   if (token) {
       try {
           const decoded = jwt.verify(token, JWT_SECRET);
           socket.join(`user:${decoded.id}`);
+          currentUserId = decoded.id;
           console.log(`User ${decoded.id} auto-authenticated via handshake`);
       } catch (e) {
           console.error("Handshake auth failed", e.message);
@@ -61,6 +64,7 @@ io.on('connection', (socket) => {
       try {
           const decoded = jwt.verify(token, JWT_SECRET);
           socket.join(`user:${decoded.id}`);
+          currentUserId = decoded.id;
           console.log(`User ${decoded.id} authenticated via event`);
       } catch (e) {
           console.error("Socket event auth failed");
@@ -69,6 +73,18 @@ io.on('connection', (socket) => {
 
   socket.on('join_room', (roomId) => {
     socket.join(roomId);
+  });
+
+  // --- TYPING INDICATORS ---
+  socket.on('typing_start', ({ conversationId, username }) => {
+    // console.log(`[Socket] User ${username} is typing in ${conversationId}`);
+    // Broadcast to everyone in the room EXCEPT the sender
+    socket.to(conversationId).emit('typing_start', { conversationId, username });
+  });
+
+  socket.on('typing_stop', ({ conversationId, username }) => {
+    // console.log(`[Socket] User ${username} stopped typing in ${conversationId}`);
+    socket.to(conversationId).emit('typing_stop', { conversationId, username });
   });
 
   socket.on('disconnect', () => {

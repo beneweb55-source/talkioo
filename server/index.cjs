@@ -145,7 +145,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 
-// NOUVELLE ROUTE (1/2) : Récupère tous les utilisateurs en ligne
+// Récupère tous les utilisateurs en ligne
 app.get('/api/users/online', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE is_online = TRUE');
@@ -157,7 +157,7 @@ app.get('/api/users/online', authenticateToken, async (req, res) => {
 });
 
 
-// ROUTE EXISTANTE (2/2) : Récupère un utilisateur par ID
+// Récupère un utilisateur par ID
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE id = $1', [req.params.id]);
@@ -167,7 +167,7 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// NOUVELLE ROUTE (3/3) : Récupère la liste des amis acceptés
+// Récupère la liste des amis acceptés
 app.get('/api/contacts', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     try {
@@ -200,7 +200,7 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
 
 // 2. CONVERSATIONS
 
-// NOUVEAU: Création d'une conversation (groupe ou chat privé)
+// Création d'une conversation (groupe ou chat privé)
 app.post('/api/conversations', authenticateToken, async (req, res) => {
     const { name, participantIds } = req.body; 
     const userId = req.user.id;
@@ -244,8 +244,6 @@ app.post('/api/conversations', authenticateToken, async (req, res) => {
              'INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)',
              [conversationId, userId, is_group ? `👋 Le groupe "${name}" a été créé !` : '👋 Nouvelle discussion privée.']
         );
-        
-        // 5. Notifier les autres utilisateurs via Socket.IO (TODO)
 
         res.status(201).json({ conversationId, name: is_group ? name : null, is_group, participants: allParticipants });
 
@@ -337,7 +335,6 @@ app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
             await pool.query(readQuery, readValues);
 
             // 3. Notifier TOUS les clients de cette conversation que le statut de lecture a changé
-            // Le frontend devra ré-interroger la liste des messages ou mettre à jour son état local.
             io.to(conversationId).emit('READ_RECEIPT_UPDATE', { conversationId: conversationId, readerId: userId });
         }
         
@@ -365,7 +362,8 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
 });
 
 // 3. MESSAGES
-// MODIFICATION : Ajout du COUNT des lectures
+
+// MODIFICATION : Ajout du read_count ET des infos du message répondu
 app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
     const conversationId = req.params.id;
     const userId = req.user.id;
@@ -376,13 +374,20 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
                 m.*, 
                 u.username, 
                 u.tag,
+                -- Statut de lecture
                 (
                     SELECT COUNT(*) 
                     FROM message_reads mr 
                     WHERE mr.message_id = m.id AND mr.user_id != $2
-                ) AS read_count
+                ) AS read_count,
+                -- Infos du message répondu
+                m2.content AS replied_to_content,
+                u2.username AS replied_to_username,
+                u2.tag AS replied_to_tag
             FROM messages m
             LEFT JOIN users u ON m.sender_id = u.id
+            LEFT JOIN messages m2 ON m.replied_to_message_id = m2.id
+            LEFT JOIN users u2 ON m2.sender_id = u2.id
             WHERE m.conversation_id = $1
             ORDER BY m.created_at ASC
         `, [conversationId, userId]);
@@ -390,7 +395,13 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
         const messages = result.rows.map(m => ({
             ...m,
             sender_username: m.username ? `${m.username}#${m.tag}` : 'Inconnu',
-            read_count: parseInt(m.read_count) // Convertir le count en nombre entier
+            read_count: parseInt(m.read_count),
+            // Création de l'objet reply pour le Frontend
+            reply: m.replied_to_message_id ? {
+                id: m.replied_to_message_id,
+                content: m.replied_to_content || 'Message original supprimé', // Gérer le cas si le message original est soft-deleted
+                sender: m.replied_to_username ? `${m.replied_to_username}#${m.replied_to_tag}` : 'Utilisateur inconnu'
+            } : null
         }));
         res.json(messages);
     } catch (err) {
@@ -398,32 +409,57 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
     }
 });
 
+// MODIFICATION : Ajout de la colonne replied_to_message_id dans l'insertion
 app.post('/api/messages', authenticateToken, async (req, res) => {
-    const { conversation_id, content } = req.body;
+    const { conversation_id, content, replied_to_message_id } = req.body;
     try {
         const result = await pool.query(
-            'INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3) RETURNING *',
-            [conversation_id, req.user.id, content]
+            'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id) VALUES ($1, $2, $3, $4) RETURNING *',
+            [conversation_id, req.user.id, content, replied_to_message_id || null] // Gère le cas où c'est NULL
         );
         const msg = result.rows[0];
 
-        // Après l'insertion du message, marquer le message comme lu par l'expéditeur
+        // 1. Marquer le message comme lu par l'expéditeur
         await pool.query(
             'INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT (message_id, user_id) DO NOTHING',
             [msg.id, req.user.id]
         );
 
-        // Reset soft delete for everyone in conversation
+        // 2. Reset soft delete for everyone in conversation
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
 
-        // Get sender info
+        // 3. Get sender info
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [req.user.id]);
         const sender = userRes.rows[0];
         
-        // Inclure read_count = 1 (lu par l'expéditeur lui-même)
-        const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}`, read_count: 1 }; 
+        // 4. Récupérer les infos de réponse pour le broadcast
+        let replyData = null;
+        if (msg.replied_to_message_id) {
+             const replyRes = await pool.query(`
+                SELECT m2.content, u2.username, u2.tag 
+                FROM messages m2
+                LEFT JOIN users u2 ON m2.sender_id = u2.id
+                WHERE m2.id = $1
+            `, [msg.replied_to_message_id]);
+            
+            const r = replyRes.rows[0];
+            if (r) {
+                replyData = {
+                    id: msg.replied_to_message_id,
+                    content: r.content || 'Message original supprimé',
+                    sender: r.username ? `${r.username}#${r.tag}` : 'Utilisateur inconnu'
+                };
+            }
+        }
 
-        // Socket Broadcast
+        const fullMsg = { 
+            ...msg, 
+            sender_username: `${sender.username}#${sender.tag}`, 
+            read_count: 1, // Lu par l'expéditeur lui-même
+            reply: replyData
+        }; 
+
+        // 5. Socket Broadcast
         io.to(conversation_id).emit('new_message', fullMsg);
         
         res.json(fullMsg);
@@ -440,16 +476,37 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
             [content, req.params.id]
         );
         const msg = result.rows[0];
-        // Get sender info for consistency
+        
+        // Récupérer les données pour l'envoi socket complet
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
-        // Récupérer le compte de lecture actuel pour l'envoyer
         const readCountRes = await pool.query('SELECT COUNT(*) FROM message_reads WHERE message_id = $1 AND user_id != $2', [msg.id, req.user.id]);
-
+        
+        // On récupère les infos de réponse si elles existent
+        let replyData = null;
+        if (msg.replied_to_message_id) {
+             const replyRes = await pool.query(`
+                SELECT m2.content, u2.username, u2.tag 
+                FROM messages m2
+                LEFT JOIN users u2 ON m2.sender_id = u2.id
+                WHERE m2.id = $1
+            `, [msg.replied_to_message_id]);
+            
+            const r = replyRes.rows[0];
+            if (r) {
+                replyData = {
+                    id: msg.replied_to_message_id,
+                    content: r.content || 'Message original supprimé',
+                    sender: r.username ? `${r.username}#${r.tag}` : 'Utilisateur inconnu'
+                };
+            }
+        }
+        
         const fullMsg = { 
             ...msg, 
             sender_username: `${sender.username}#${sender.tag}`,
-            read_count: parseInt(readCountRes.rows[0].count)
+            read_count: parseInt(readCountRes.rows[0].count) + 1, // +1 car on exclut l'expéditeur dans le count DB
+            reply: replyData
         };
 
         io.to(msg.conversation_id).emit('message_update', fullMsg);
@@ -468,6 +525,7 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
         const msg = result.rows[0];
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
+        
         const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
 
         io.to(msg.conversation_id).emit('message_update', fullMsg);

@@ -4,20 +4,17 @@ import { User, Conversation, Message, AuthResponse, FriendRequest } from '../typ
 // --- CONFIGURATION DYNAMIQUE ---
 
 // 🚨 URL DE PRODUCTION (Render)
+// Pour ce MVP, on force la connexion au backend en ligne même en local
+// cela permet de tester l'app sans avoir à lancer le serveur Node localement.
 const PROD_BACKEND_URL = 'https://talkioo.onrender.com';
 
-// DÉTECTION AUTOMATIQUE DE L'ENVIRONNEMENT
-// Si on est sur localhost, on utilise le backend local. Sinon, la prod.
-const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+// Si vous voulez utiliser un serveur local, décommentez la ligne suivante :
+// const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:3001' : PROD_BACKEND_URL;
 
-const API_BASE = isLocal ? 'http://localhost:3001' : PROD_BACKEND_URL;
+const API_BASE = PROD_BACKEND_URL; 
 const API_URL = `${API_BASE}/api`;
 
-if (isLocal) {
-    console.log(`[Talkio] 🔧 Mode Dev détecté: Connexion au backend LOCAL (${API_BASE})`);
-} else {
-    console.log(`[Talkio] 🚀 Mode Prod détecté: Connexion au backend DISTANT (${API_BASE})`);
-}
+console.log(`[Talkio] Connecting to Backend: ${API_BASE}`);
 
 // --- SOCKET INSTANCE ---
 let socket: Socket;
@@ -25,21 +22,21 @@ let socket: Socket;
 export const connectSocket = (token: string) => {
     if (socket && socket.connected) return;
     
-    console.log(`[Socket] Connecting to ${API_BASE}...`);
     socket = io(API_BASE, {
         auth: { token },
-        transports: ['websocket', 'polling'],
+        transports: ['websocket', 'polling'], // Polling en backup pour Vercel/Firewalls
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
     });
 
     socket.on('connect', () => {
-        console.log('✅ Socket connected:', socket.id);
+        console.log('Socket connected:', socket.id);
+        // Join personal user channel for notifications
         socket.emit('authenticate', token);
     });
 
     socket.on('connect_error', (err) => {
-        console.error("❌ Socket Connection Error:", err.message);
+        console.error("Socket Connection Error:", err);
     });
 };
 
@@ -61,25 +58,17 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
             headers: { ...headers, ...options.headers }
         });
         
-        const contentType = response.headers.get("content-type");
-        
-        // Si la réponse n'est pas du JSON (ex: erreur 404 HTML, erreur serveur 500)
-        if (contentType && contentType.indexOf("application/json") === -1) {
-            const text = await response.text();
-            console.error(`[API Error] Non-JSON response from ${endpoint}:`, text.substring(0, 200)); // Log le début du HTML
-            throw new Error(`Erreur serveur (${response.status}): Réponse inattendue.`);
-        }
-
         const data = await response.json();
         
         if (!response.ok) {
-            throw new Error(data.error || `Erreur API ${response.status}`);
+            throw new Error(data.error || 'Erreur API');
         }
         
         return data;
     } catch (error: any) {
+        // Transforme "Failed to fetch" en un message plus clair pour l'utilisateur
         if (error.message === 'Failed to fetch') {
-            throw new Error("Impossible de joindre le serveur. Vérifiez qu'il est lancé (npm start dans /server) !");
+            throw new Error("Impossible de joindre le serveur. Il démarre peut-être ? (Attendez 30s)");
         }
         console.error(`API Error (${endpoint}):`, error.message);
         throw error;
@@ -227,44 +216,5 @@ export const subscribeToConversationsList = (onUpdate: () => void) => {
         socket.off('new_message', handler);
         socket.off('message_update', handler);
         socket.off('request_accepted', handler);
-    };
-};
-
-export const sendTypingEvent = (conversationId: string, isTyping: boolean, username: string) => {
-    if (!socket) return;
-    if (isTyping) {
-        socket.emit('typing_start', { conversationId, username });
-    } else {
-        socket.emit('typing_stop', { conversationId, username });
-    }
-};
-
-export const subscribeToTypingEvents = (
-    conversationId: string, 
-    onStart: (username: string) => void, 
-    onStop: (username: string) => void
-) => {
-    if (!socket) return () => {};
-
-    const handleStart = (data: { conversationId: string, username: string }) => {
-        if (data.conversationId === conversationId) {
-            // console.log('[Typing Start]', data.username);
-            onStart(data.username);
-        }
-    };
-
-    const handleStop = (data: { conversationId: string, username: string }) => {
-        if (data.conversationId === conversationId) {
-            // console.log('[Typing Stop]', data.username);
-            onStop(data.username);
-        }
-    };
-
-    socket.on('typing_start', handleStart);
-    socket.on('typing_stop', handleStop);
-
-    return () => {
-        socket.off('typing_start', handleStart);
-        socket.off('typing_stop', handleStop);
     };
 };

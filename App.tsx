@@ -172,16 +172,15 @@ const Dashboard = () => {
   const activeConversation = conversations.find(c => c.id === activeConversationId);
 
   return (
-    // Utilisation de h-[100dvh] pour le mobile (gère la barre d'adresse)
-    <div className="flex h-[100dvh] w-full bg-gray-100 overflow-hidden relative font-sans">
+    <div className="flex h-screen w-full bg-gray-100 overflow-hidden relative font-sans">
       
       {/* Modal: Ajouter un ami */}
       {isModalOpen && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-            <div className="bg-white rounded-xl shadow-2xl w-[90%] md:w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200 border border-gray-100">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200 border border-gray-100">
                 <button 
                     onClick={() => setIsModalOpen(false)}
-                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors p-2"
+                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
                 >
                     <X size={24} />
                 </button>
@@ -266,7 +265,7 @@ const Dashboard = () => {
 
                   {/* Dropdown Notifications */}
                   {showNotifications && (
-                      <div className="absolute top-full right-[-60px] md:right-0 mt-2 w-80 bg-white rounded-xl shadow-2xl border border-gray-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden ring-1 ring-black ring-opacity-5">
+                      <div className="absolute top-full right-0 mt-2 w-80 bg-white rounded-xl shadow-2xl border border-gray-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden ring-1 ring-black ring-opacity-5">
                           <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-100">
                              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Demandes d'amis</h3>
                              <button onClick={fetchRequests} className={`text-gray-400 hover:text-orange-600 transition-colors ${refreshingNotifs ? 'animate-spin' : ''}`}>
@@ -392,7 +391,7 @@ const AuthWrapper = () => {
   const { user, isLoading } = useAuth();
 
   if (isLoading) {
-    return <div className="h-[100dvh] w-screen flex items-center justify-center bg-gray-50 text-orange-600">Chargement...</div>;
+    return <div className="h-screen w-screen flex items-center justify-center bg-gray-50 text-orange-600">Chargement...</div>;
   }
 
   return user ? <Dashboard /> : <AuthScreen />;

@@ -13,7 +13,7 @@ import {
   subscribeToFriendRequests,
   subscribeToConversationsList
 } from './services/api';
-import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy } from 'lucide-react';
+import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy, RefreshCw } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 
@@ -27,6 +27,7 @@ const Dashboard = () => {
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadNotifsCount, setUnreadNotifsCount] = useState(0);
+  const [refreshingNotifs, setRefreshingNotifs] = useState(false);
 
   // New Chat/Friend Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -48,6 +49,7 @@ const Dashboard = () => {
 
   const fetchRequests = async () => {
       if(!user) return;
+      setRefreshingNotifs(true);
       try {
           const reqs = await getIncomingFriendRequestsAPI(user.id);
           setFriendRequests(reqs);
@@ -57,6 +59,8 @@ const Dashboard = () => {
           setUnreadNotifsCount(pendingCount);
       } catch (e) {
           console.error("Error fetching requests", e);
+      } finally {
+          setRefreshingNotifs(false);
       }
   };
 
@@ -96,18 +100,30 @@ const Dashboard = () => {
     setModalSuccess('');
 
     try {
-        await sendFriendRequestAPI(user.id, newChatTarget);
-        setModalSuccess(`Demande envoyée à ${newChatTarget} !`);
-        setNewChatTarget('');
+        const response = await sendFriendRequestAPI(user.id, newChatTarget);
         
-        setTimeout(() => {
-            setIsModalOpen(false);
-            setModalSuccess('');
-        }, 2000);
+        // Check for Mutual Add (conversationId present in response)
+        if (response && response.conversationId) {
+             setModalSuccess("Ami ajouté mutuellement !");
+             await fetchConversations();
+             setActiveConversationId(response.conversationId);
+             setTimeout(() => {
+                setIsModalOpen(false);
+                setModalSuccess('');
+                setNewChatTarget('');
+            }, 1500);
+        } else {
+             setModalSuccess(`Demande envoyée à ${newChatTarget} !`);
+             setNewChatTarget('');
+             setTimeout(() => {
+                setIsModalOpen(false);
+                setModalSuccess('');
+            }, 2000);
+        }
     } catch (err: any) {
-        // Detection of the "Restored Chat" case
+        // Detection of the "Restored Chat" legacy case
         if (err.message && err.message.includes('rouverte')) {
-            setModalSuccess(err.message); // Show as success (Green)
+            setModalSuccess(err.message); 
             setNewChatTarget('');
              setTimeout(() => {
                 setIsModalOpen(false);
@@ -252,6 +268,9 @@ const Dashboard = () => {
                       <div className="absolute top-full right-0 mt-2 w-80 bg-white rounded-xl shadow-2xl border border-gray-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden ring-1 ring-black ring-opacity-5">
                           <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-100">
                              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Demandes d'amis</h3>
+                             <button onClick={fetchRequests} className={`text-gray-400 hover:text-orange-600 transition-colors ${refreshingNotifs ? 'animate-spin' : ''}`}>
+                                 <RefreshCw size={14} />
+                             </button>
                           </div>
                           
                           {friendRequests.length === 0 ? (

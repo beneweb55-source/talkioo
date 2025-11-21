@@ -3,14 +3,15 @@ import { User, Conversation, Message, AuthResponse, FriendRequest } from '../typ
 
 // --- CONFIGURATION DYNAMIQUE ---
 
-// 1. Si on est en local (localhost), on tape sur le serveur local (3001)
-// 2. Si on est sur Vercel (Production), on doit taper sur l'URL du Backend hébergé (Render/Railway)
-const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
 // 🚨 URL DE PRODUCTION (Render)
+// Pour ce MVP, on force la connexion au backend en ligne même en local
+// cela permet de tester l'app sans avoir à lancer le serveur Node localement.
 const PROD_BACKEND_URL = 'https://talkioo.onrender.com';
 
-const API_BASE = isLocal ? 'http://localhost:3001' : PROD_BACKEND_URL;
+// Si vous voulez utiliser un serveur local, décommentez la ligne suivante :
+// const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:3001' : PROD_BACKEND_URL;
+
+const API_BASE = PROD_BACKEND_URL; 
 const API_URL = `${API_BASE}/api`;
 
 console.log(`[Talkio] Connecting to Backend: ${API_BASE}`);
@@ -65,6 +66,10 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
         
         return data;
     } catch (error: any) {
+        // Transforme "Failed to fetch" en un message plus clair pour l'utilisateur
+        if (error.message === 'Failed to fetch') {
+            throw new Error("Impossible de joindre le serveur. Il démarre peut-être ? (Attendez 30s)");
+        }
         console.error(`API Error (${endpoint}):`, error.message);
         throw error;
     }
@@ -144,12 +149,12 @@ export const deleteMessageAPI = async (messageId: string): Promise<boolean> => {
 
 // --- FRIEND REQUESTS ---
 
-export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifier: string): Promise<boolean> => {
-    await fetchWithAuth('/friend_requests', {
+export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifier: string): Promise<any> => {
+    const response = await fetchWithAuth('/friend_requests', {
         method: 'POST',
         body: JSON.stringify({ targetIdentifier })
     });
-    return true;
+    return response;
 };
 
 export const getIncomingFriendRequestsAPI = async (userId: string): Promise<FriendRequest[]> => {

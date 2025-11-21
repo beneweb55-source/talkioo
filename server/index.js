@@ -45,7 +45,6 @@ io.on('connection', (socket) => {
   console.log('New socket connection:', socket.id);
 
   // 1. Auth via Handshake (Connexion initiale)
-  // Permet d'authentifier l'utilisateur dès la connexion s'il envoie le token
   const token = socket.handshake.auth?.token;
   if (token) {
       try {
@@ -70,7 +69,6 @@ io.on('connection', (socket) => {
 
   socket.on('join_room', (roomId) => {
     socket.join(roomId);
-    // console.log(`Socket ${socket.id} joined room ${roomId}`);
   });
 
   socket.on('disconnect', () => {
@@ -80,9 +78,11 @@ io.on('connection', (socket) => {
 
 // --- DATABASE INITIALIZATION ---
 const initDB = async () => {
-    const client = await pool.connect();
+    let client;
     try {
-        console.log("Checking Database Schema...");
+        console.log("🔄 Connecting to Database...");
+        client = await pool.connect();
+        console.log("✅ Connected. Checking Database Schema...");
         
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
@@ -137,11 +137,14 @@ const initDB = async () => {
             );
         `);
         
-        console.log("Database Schema Synchronized.");
+        console.log("✅ Database Schema Synchronized.");
     } catch (err) {
-        console.error("Error initializing DB:", err);
+        console.error("\n❌ FATAL ERROR: Database initialization failed.");
+        console.error("Detail:", err.message);
+        console.error("HINT: Check your 'DATABASE_URL' environment variable in Render settings.\n");
+        process.exit(1); // CRUCIAL: Stop the server so Render restarts it and shows the error
     } finally {
-        client.release();
+        if (client) client.release();
     }
 };
 
@@ -173,33 +176,74 @@ app.get('/', (req, res) => {
 
 // 1. AUTH
 app.post('/api/auth/register', async (req, res) => {
-    const { username, email, password } = req.body;
+    let { username, email, password } = req.body;
     if (!username || !email || !password) return res.status(400).json({error: "Champs manquants"});
+    
+    email = email.toLowerCase().trim();
+    username = username.trim();
 
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
-        const tag = Math.floor(1000 + Math.random() * 9000).toString();
         
-        const result = await pool.query(
-            'INSERT INTO users (username, email, password_hash, tag) VALUES ($1, $2, $3, $4) RETURNING id, username, tag, email, created_at',
-            [username, email, hashedPassword, tag]
-        );
+        // Retry logic for unique Tag generation
+        let user = null;
+        let attempts = 0;
+        const MAX_ATTEMPTS = 5;
+
+        while(attempts < MAX_ATTEMPTS) {
+            const tag = Math.floor(1000 + Math.random() * 9000).toString();
+            try {
+                 const result = await pool.query(
+                    'INSERT INTO users (username, email, password_hash, tag) VALUES ($1, $2, $3, $4) RETURNING id, username, tag, email, created_at',
+                    [username, email, hashedPassword, tag]
+                );
+                user = result.rows[0];
+                break; // Success
+            } catch (insertErr) {
+                 if (insertErr.code === '23505') {
+                     // 23505 = Unique violation.
+                     const constraint = insertErr.constraint || '';
+                     const detail = insertErr.detail || '';
+                     
+                     if (constraint.includes('tag') || detail.includes('tag')) {
+                         attempts++;
+                         continue; // Retry with a new random tag
+                     }
+                     throw new Error("EMAIL_EXISTS");
+                 } else {
+                     throw insertErr; // Other SQL error
+                 }
+            }
+        }
+
+        if (!user) throw new Error("TAG_RETRY_LIMIT");
         
-        const user = result.rows[0];
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
         
         res.json({ user, token });
     } catch (err) {
         console.error("Register Error:", err);
-        if (err.code === '23505') { 
+        
+        if (err.message === 'EMAIL_EXISTS') { 
             return res.status(400).json({ error: "Cet email est déjà utilisé." });
         }
-        res.status(500).json({ error: "Erreur serveur" });
+        
+        if (err.message === 'TAG_RETRY_LIMIT') {
+            return res.status(400).json({ error: "Le serveur est saturé (Tags épuisés), réessayez." });
+        }
+        
+        if (err.code === '23505') {
+             return res.status(400).json({ error: "Cet email ou cet identifiant existe déjà." });
+        }
+        
+        res.status(500).json({ error: "Erreur serveur lors de l'inscription" });
     }
 });
 
 app.post('/api/auth/login', async (req, res) => {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
+    email = email.toLowerCase().trim(); // Normalize
+
     try {
         const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         const user = result.rows[0];
@@ -250,11 +294,9 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
             
             const lastMsg = msgRes.rows[0];
             
-            // Si la conversation a été supprimée APRÈS le dernier message, on ne l'affiche pas
             if (conv.last_deleted_at && lastMsg && new Date(conv.last_deleted_at) > new Date(lastMsg.created_at)) {
                 return null; 
             }
-            // Si pas de messages et supprimée, on ne l'affiche pas
             if (!lastMsg && conv.last_deleted_at) return null;
 
             return {
@@ -335,13 +377,11 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         );
         const msg = result.rows[0];
 
-        // Si la conversation était "supprimée" pour quelqu'un, le nouveau message la fait réapparaître
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
 
         const sender = await getUserInfo(req.user.id);
         const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
 
-        // Emission Temps Réel
         io.to(conversation_id).emit('new_message', fullMsg);
         
         res.json(fullMsg);
@@ -427,6 +467,33 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
         const areFriends = existing.rows.some(r => r.status === 'accepted');
         if (areFriends) return res.status(400).json({ error: "Vous êtes déjà amis !" });
         
+        // --- MUTUAL ADD LOGIC (FIX DEADLOCK) ---
+        // If Target already sent me a request (pending), and I send one back, 
+        // we should just ACCEPT the existing request instead of erroring "Already sent".
+        
+        const reversePending = existing.rows.find(r => r.sender_id === targetUser.id && r.receiver_id === req.user.id && r.status === 'pending');
+
+        if (reversePending) {
+            // 1. Update status to accepted
+            await pool.query('UPDATE friend_requests SET status = $1 WHERE id = $2', ['accepted', reversePending.id]);
+            
+            // 2. Create Conversation
+            const convRes = await pool.query('INSERT INTO conversations (is_group) VALUES (false) RETURNING id');
+            const convId = convRes.rows[0].id;
+            
+            // 3. Add Participants
+            await pool.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2), ($3, $2)', [req.user.id, convId, targetUser.id]);
+            
+            // 4. System Message
+            await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [convId, req.user.id, '👋 Ami accepté mutuellement !']);
+            
+            // 5. Notify both
+            io.to(`user:${targetUser.id}`).emit('request_accepted', { conversationId: convId });
+            io.to(`user:${req.user.id}`).emit('request_accepted', { conversationId: convId });
+
+            return res.json({ success: true, message: "Vous êtes désormais amis !", conversationId: convId });
+        }
+
         const isPending = existing.rows.some(r => r.status === 'pending');
         if (isPending) return res.status(400).json({ error: "Demande déjà en cours" });
 
@@ -435,7 +502,6 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
             [req.user.id, targetUser.id]
         );
 
-        // Notifier l'utilisateur cible en temps réel
         io.to(`user:${targetUser.id}`).emit('friend_request', newReq.rows[0]);
         res.json({ success: true });
 

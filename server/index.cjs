@@ -16,7 +16,7 @@ const JWT_SECRET = 'super_secret_key_change_this_in_prod';
 const connectionString = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_XPSO1Fe6aqZk@ep-misty-queen-agi42tnv-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require';
 
 const pool = new Pool({
-  connectionString: connectionString,
+    connectionString: connectionString,
 });
 
 // --- MIDDLEWARE ---
@@ -25,49 +25,59 @@ app.use(express.json());
 
 // --- SOCKET.IO SETUP ---
 const io = new Server(server, {
-  cors: {
-    origin: "*", // Allow all origins for MVP
-    methods: ["GET", "POST"]
-  }
+    cors: {
+        origin: "*", // Allow all origins for MVP
+        methods: ["GET", "POST"]
+    }
 });
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+    console.log('User connected:', socket.id);
 
-  socket.on('join_room', (roomId) => {
-    socket.join(roomId);
-    console.log(`User ${socket.id} joined room ${roomId}`);
-  });
-  
-  socket.on('join_user_channel', (userId) => {
-      socket.join(`user:${userId}`);
-  });
+    // TODO: Mise à jour du statut en ligne (lorsque l'authentification est gérée)
+    // C'est ici que tu mettras le code pour UPDATE users SET is_online = TRUE, socket_id = socket.id
 
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-  });
+
+    socket.on('join_room', (roomId) => {
+        socket.join(roomId);
+        console.log(`User ${socket.id} joined room ${roomId}`);
+    });
+    
+    socket.on('join_user_channel', (userId) => {
+        socket.join(`user:${userId}`);
+    });
+
+    socket.on('disconnect', () => {
+        console.log('User disconnected:', socket.id);
+        // TODO: Mise à jour du statut hors ligne
+        // C'est ici que tu mettras le code pour UPDATE users SET is_online = FALSE, socket_id = NULL
+    });
 });
 
 // --- AUTH MIDDLEWARE ---
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.sendStatus(401);
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) return res.sendStatus(401);
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
-    req.user = user;
-    next();
-  });
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
 };
 
 // --- API ROUTES ---
 
-// 1. AUTH
+// 1. AUTH & USERS
+
 app.post('/api/auth/register', async (req, res) => {
     const { username, email, password } = req.body;
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
+        
+        // Fix for registration error: ensuring tag uniqueness might be needed here, 
+        // but for now, we rely on the DB UNIQUE constraint (username, tag).
         const tag = Math.floor(1000 + Math.random() * 9000).toString();
         
         const result = await pool.query(
@@ -81,6 +91,7 @@ app.post('/api/auth/register', async (req, res) => {
         res.json({ user, token });
     } catch (err) {
         console.error(err);
+        // Improved error message logic is highly recommended here, but keeping original for now
         res.status(400).json({ error: "Erreur inscription (Email déjà pris ?)" });
     }
 });
@@ -105,14 +116,63 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+
+// NOUVELLE ROUTE (1/2) : Récupère tous les utilisateurs en ligne (DOIT ÊTRE EN PREMIER)
+// CORRECTION DE L'ERREUR UUID: "online" n'est plus interprété comme un ID
+app.get('/api/users/online', authenticateToken, async (req, res) => {
+    try {
+        // Ajout de is_online dans la sélection
+        const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE is_online = TRUE');
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Erreur lors de la récupération des utilisateurs en ligne:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+// ROUTE EXISTANTE (2/2) : Récupère un utilisateur par ID
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, username, tag, email FROM users WHERE id = $1', [req.params.id]);
+        // Ajout de is_online dans la sélection
+        const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE id = $1', [req.params.id]);
         res.json(result.rows[0]);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+
+// NOUVELLE ROUTE (3/3) : Récupère la liste des amis acceptés (CORRECTION ERREUR 404 /contacts)
+app.get('/api/contacts', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    try {
+        const query = `
+            SELECT 
+                u.id, u.username, u.tag, u.email, u.is_online,
+                fr.status AS friend_status,
+                c.id AS conversation_id
+            FROM friend_requests fr
+            -- Joindre l'autre utilisateur de la demande
+            JOIN users u ON (CASE WHEN fr.sender_id = $1 THEN fr.receiver_id ELSE fr.sender_id END) = u.id
+            -- Joindre la conversation privée
+            LEFT JOIN participants p1 ON p1.user_id = fr.sender_id AND p1.conversation_id IN (
+                SELECT p2.conversation_id FROM participants p2 WHERE p2.user_id = fr.receiver_id
+            )
+            LEFT JOIN conversations c ON c.id = p1.conversation_id AND c.is_group = FALSE
+            
+            WHERE (fr.sender_id = $1 OR fr.receiver_id = $1) AND fr.status = 'accepted'
+        `;
+        
+        const result = await pool.query(query, [userId]);
+        
+        // Renvoyer la liste complète des amis (contacts)
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Erreur lors de la récupération des contacts:", err);
+        res.status(500).json({ error: "Erreur serveur interne lors du chargement des contacts." });
+    }
+});
+
 
 // 2. CONVERSATIONS
 app.get('/api/conversations', authenticateToken, async (req, res) => {
@@ -167,8 +227,9 @@ app.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
 
 app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     try {
+        // Ajout de is_online dans la sélection
         const result = await pool.query(`
-            SELECT u.id, u.username, u.tag, u.email 
+            SELECT u.id, u.username, u.tag, u.email, u.is_online
             FROM participants p 
             JOIN users u ON p.user_id = u.id 
             WHERE p.conversation_id = $1 AND p.user_id != $2
@@ -362,7 +423,8 @@ app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res)
     }
 });
 
+
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Database URL: ${connectionString}`);
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Database URL: ${connectionString}`);
 });

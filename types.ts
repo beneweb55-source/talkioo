@@ -31,6 +31,12 @@ export interface Message {
   updated_at?: string; // New: For edit history
   deleted_at?: string; // New: For soft delete (delete for everyone)
   sender_username?: string;
+  read_count?: number;
+  reply?: {
+    id: string;
+    content: string;
+    sender: string;
+  } | null;
 }
 
 export interface FriendRequest {

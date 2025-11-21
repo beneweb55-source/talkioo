@@ -124,8 +124,15 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
     return await fetchWithAuth(`/conversations/${conversationId}/messages`);
 };
 
-export const sendMessageAPI = async (conversationId: string, userId: string, content: string): Promise<Message> => {
-    return await fetchWithAuth('/messages', { method: 'POST', body: JSON.stringify({ conversation_id: conversationId, content }) });
+export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string): Promise<Message> => {
+    return await fetchWithAuth('/messages', { 
+        method: 'POST', 
+        body: JSON.stringify({ 
+            conversation_id: conversationId, 
+            content,
+            replied_to_message_id: repliedToId 
+        }) 
+    });
 };
 
 export const editMessageAPI = async (messageId: string, newContent: string): Promise<Message> => {
@@ -134,6 +141,10 @@ export const editMessageAPI = async (messageId: string, newContent: string): Pro
 
 export const deleteMessageAPI = async (messageId: string): Promise<boolean> => {
     try { await fetchWithAuth(`/messages/${messageId}`, { method: 'DELETE' }); return true; } catch (e) { return false; }
+};
+
+export const markMessagesAsReadAPI = async (conversationId: string): Promise<void> => {
+    try { await fetchWithAuth(`/conversations/${conversationId}/read`, { method: 'POST' }); } catch(e) { console.error(e); }
 };
 
 // --- FRIEND REQUESTS ---
@@ -178,6 +189,19 @@ export const subscribeToMessages = (conversationId: string, onMessage: (msg: Mes
         socket.off('new_message', handler);
         socket.off('message_update', handler);
     };
+};
+
+export const subscribeToReadReceipts = (conversationId: string, onReadUpdate: () => void) => {
+    if (!socket) return () => {};
+    
+    const handler = (data: { conversationId: string }) => {
+        if (data.conversationId === conversationId) {
+            onReadUpdate();
+        }
+    };
+    
+    socket.on('read_receipt_update', handler);
+    return () => socket.off('read_receipt_update', handler);
 };
 
 export const subscribeToTypingEvents = (conversationId: string, onTyping: (userId: string, isTyping: boolean) => void) => {

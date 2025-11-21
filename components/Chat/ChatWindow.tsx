@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents } from '../../services/api';
+import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, MoreVertical, Phone, Video, X } from 'lucide-react';
+import { Send, MoreVertical, Phone, Video, X, Reply, Pencil } from 'lucide-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -17,7 +17,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [loading, setLoading] = useState(true);
   const [headerName, setHeaderName] = useState('');
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
+  
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   
   // Typing Logic
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
@@ -52,11 +54,22 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   useEffect(() => {
     setLoading(true);
     setTypingUsers(new Set());
-    getMessagesAPI(conversation.id).then(data => {
-      setMessages(data);
-      setLoading(false);
-      setTimeout(scrollToBottom, 100);
-    });
+    
+    const fetchAndMark = async () => {
+        try {
+            const data = await getMessagesAPI(conversation.id);
+            setMessages(data);
+            setLoading(false);
+            setTimeout(scrollToBottom, 100);
+            
+            // Mark as read
+            await markMessagesAsReadAPI(conversation.id);
+        } catch(e) {
+            console.error(e);
+            setLoading(false);
+        }
+    };
+    fetchAndMark();
 
     const unsubscribeMsgs = subscribeToMessages(conversation.id, (newMessage) => {
         setMessages(prev => {
@@ -71,6 +84,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         
         if (!messages.find(m => m.id === newMessage.id)) {
             setTimeout(scrollToBottom, 100);
+            // Mark new incoming message as read if window is focused/open
+            markMessagesAsReadAPI(conversation.id);
         }
     });
 
@@ -82,10 +97,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             return next;
         });
     });
+    
+    const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => {
+        // Refresh messages to update read counts
+        getMessagesAPI(conversation.id).then(setMessages);
+    });
 
     return () => {
         unsubscribeMsgs();
         unsubscribeTyping();
+        unsubscribeReads();
     };
   }, [conversation.id]);
 
@@ -128,11 +149,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }
     } else {
         setInputText(''); 
+        // If replying, clear reply state
+        const replyId = replyingTo ? replyingTo.id : undefined;
+        setReplyingTo(null);
+
         try {
-            await sendMessageAPI(conversation.id, currentUser.id, text);
+            await sendMessageAPI(conversation.id, currentUser.id, text, replyId);
         } catch (err) {
             console.error("Failed to send", err);
             setInputText(text);
+            setReplyingTo(replyingTo); // Restore reply state if failed
             alert("Erreur d'envoi");
         }
     }
@@ -140,12 +166,25 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   const handleStartEdit = (msg: Message) => {
       setEditingMessage(msg);
+      setReplyingTo(null); // Cannot edit and reply same time usually
       setInputText(msg.content);
+  };
+
+  const handleReply = (msg: Message) => {
+      setReplyingTo(msg);
+      setEditingMessage(null);
+      // Focus input
+      const input = document.querySelector('input[type="text"]') as HTMLInputElement;
+      if(input) input.focus();
   };
 
   const handleCancelEdit = () => {
       setEditingMessage(null);
       setInputText('');
+  };
+
+  const handleCancelReply = () => {
+      setReplyingTo(null);
   };
 
   const handleDelete = async (msg: Message) => {
@@ -162,6 +201,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         {/* Header */}
         <div className="h-16 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 shadow-sm z-10 shrink-0 transition-colors">
             <div className="flex items-center gap-3 overflow-hidden">
+                <button onClick={onBack} className="md:hidden text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white">
+                    <X size={24} />
+                </button>
                 <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-500 to-orange-700 text-white flex items-center justify-center font-bold shadow-sm flex-shrink-0">
                     {headerName?.charAt(0).toUpperCase() || '?'}
                 </div>
@@ -198,6 +240,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         isOwn={msg.sender_id === currentUser.id}
                         onEdit={handleStartEdit}
                         onDelete={handleDelete}
+                        onReply={handleReply}
                     />
                 ))
             )}
@@ -221,10 +264,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
         {/* Input Area */}
         <div className="w-full bg-white dark:bg-gray-800 px-4 py-3 border-t border-gray-100 dark:border-gray-700 shrink-0 transition-colors">
+            
+            {/* Edit Indicator */}
             {editingMessage && (
                 <div className="flex items-center justify-between bg-orange-50 dark:bg-orange-900/20 px-4 py-2 rounded-t-lg border-l-4 border-orange-500 mb-2">
                     <div className="flex flex-col overflow-hidden">
-                        <span className="text-xs font-bold text-orange-700 dark:text-orange-400">Modification du message</span>
+                        <span className="text-xs font-bold text-orange-700 dark:text-orange-400 flex items-center gap-1"><Pencil size={12}/> Modification du message</span>
                         <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{editingMessage.content}</span>
                     </div>
                     <button onClick={handleCancelEdit} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1">
@@ -232,12 +277,26 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     </button>
                 </div>
             )}
+
+            {/* Reply Indicator */}
+            {replyingTo && (
+                <div className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 px-4 py-2 rounded-t-lg border-l-4 border-blue-500 mb-2 animate-in slide-in-from-bottom-2">
+                    <div className="flex flex-col overflow-hidden">
+                        <span className="text-xs font-bold text-blue-700 dark:text-blue-400 flex items-center gap-1"><Reply size={12}/> Réponse à {replyingTo.sender_username}</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{replyingTo.content}</span>
+                    </div>
+                    <button onClick={handleCancelReply} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1">
+                        <X size={16} />
+                    </button>
+                </div>
+            )}
+
             <form onSubmit={handleSendMessage} className="flex items-center gap-2">
                 <input
                     type="text"
                     value={inputText}
                     onChange={handleInputChange}
-                    placeholder={editingMessage ? "Modifier votre message..." : "Écrivez un message..."}
+                    placeholder={editingMessage ? "Modifier votre message..." : (replyingTo ? "Répondre..." : "Écrivez un message...")}
                     className={`flex-1 py-3 px-4 rounded-full border focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-gray-50 dark:bg-gray-700 dark:text-white shadow-inner transition-all ${editingMessage ? 'border-orange-300 ring-2 ring-orange-100 dark:ring-orange-900' : 'border-gray-200 dark:border-gray-600'}`}
                 />
                 <button 

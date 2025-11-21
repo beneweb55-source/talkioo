@@ -31,12 +31,28 @@ const io = new Server(server, {
     }
 });
 
-io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
+io.on('connection', async (socket) => { 
+    // Assumes the Frontend sends the userId in the handshake query
+    // Example Frontend connection: const socket = io(SERVER_URL, { query: { userId: currentUserId } });
+    const userId = socket.handshake.query.userId; 
+    console.log('User connected:', socket.id, 'User ID:', userId);
 
-    // TODO: Mise à jour du statut en ligne (lorsque l'authentification est gérée)
-    // C'est ici que tu mettras le code pour UPDATE users SET is_online = TRUE, socket_id = socket.id
-
+    if (userId) {
+        try {
+            // METTRE À JOUR LE STATUT EN LIGNE (Correction du TODO)
+            await pool.query(
+                'UPDATE users SET is_online = TRUE, socket_id = $1 WHERE id = $2',
+                [socket.id, userId]
+            );
+            
+            // Notifier le changement de statut à tous (important pour que les amis voient le statut)
+            io.emit('USER_STATUS_UPDATE', { userId: userId, isOnline: true }); 
+            
+            socket.join(`user:${userId}`);
+        } catch (err) {
+            console.error("Erreur mise à jour connexion statut:", err.message);
+        }
+    }
 
     socket.on('join_room', (roomId) => {
         socket.join(roomId);
@@ -47,10 +63,26 @@ io.on('connection', (socket) => {
         socket.join(`user:${userId}`);
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => { 
         console.log('User disconnected:', socket.id);
-        // TODO: Mise à jour du statut hors ligne
-        // C'est ici que tu mettras le code pour UPDATE users SET is_online = FALSE, socket_id = NULL
+        
+        try {
+            // Retrouver l'ID utilisateur à partir de l'ID Socket
+            const userRes = await pool.query('SELECT id FROM users WHERE socket_id = $1', [socket.id]);
+            const disconnectedUserId = userRes.rows[0]?.id;
+
+            if (disconnectedUserId) {
+                // METTRE À JOUR LE STATUT HORS LIGNE (Correction du TODO)
+                await pool.query(
+                    'UPDATE users SET is_online = FALSE, socket_id = NULL WHERE id = $1',
+                    [disconnectedUserId]
+                );
+                // Notifier le changement de statut à tous
+                io.emit('USER_STATUS_UPDATE', { userId: disconnectedUserId, isOnline: false });
+            }
+        } catch (err) {
+            console.error("Erreur mise à jour déconnexion statut:", err.message);
+        }
     });
 });
 
@@ -115,7 +147,6 @@ app.post('/api/auth/login', async (req, res) => {
 
 
 // NOUVELLE ROUTE (1/2) : Récupère tous les utilisateurs en ligne (DOIT ÊTRE EN PREMIER)
-// CORRECTION DE L'ERREUR UUID: "online" n'est plus interprété comme un ID
 app.get('/api/users/online', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE is_online = TRUE');
@@ -127,7 +158,7 @@ app.get('/api/users/online', authenticateToken, async (req, res) => {
 });
 
 
-// ROUTE EXISTANTE (2/2) : Récupère un utilisateur par ID (doit venir après /api/users/online)
+// ROUTE EXISTANTE (2/2) : Récupère un utilisateur par ID
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE id = $1', [req.params.id]);
@@ -137,7 +168,7 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// NOUVELLE ROUTE (3/3) : Récupère la liste des amis acceptés (CORRECTION ERREUR 404 /contacts)
+// NOUVELLE ROUTE (3/3) : Récupère la liste des amis acceptés
 app.get('/api/contacts', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     try {
@@ -171,9 +202,8 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
 // 2. CONVERSATIONS
 
 // NOUVEAU: Création d'une conversation (groupe ou chat privé)
-// CORRECTION DE L'ERREUR 404 sur POST /api/conversations (Création de groupe)
 app.post('/api/conversations', authenticateToken, async (req, res) => {
-    const { name, participantIds } = req.body; // name est optionnel (groupes), participantIds est un tableau d'UUID
+    const { name, participantIds } = req.body; 
     const userId = req.user.id;
 
     if (!participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {

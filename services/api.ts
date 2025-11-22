@@ -18,8 +18,12 @@ let socket: Socket;
 export const connectSocket = (token: string) => {
     if (socket && socket.connected) return;
     
+    // Retrieve userId to map socket_id in DB for Online Status
+    const userId = localStorage.getItem('talkio_current_user_id');
+
     socket = io(API_BASE, {
         auth: { token },
+        query: { userId },
         transports: ['websocket', 'polling'], 
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
@@ -221,8 +225,8 @@ export const subscribeToUserStatus = (onStatusChange: (userId: string, isOnline:
     const handler = (data: { userId: string, isOnline: boolean }) => {
         onStatusChange(data.userId, data.isOnline);
     };
-    socket.on('user_status', handler);
-    return () => socket.off('user_status', handler);
+    socket.on('USER_STATUS_UPDATE', handler);
+    return () => socket.off('USER_STATUS_UPDATE', handler);
 };
 
 export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {

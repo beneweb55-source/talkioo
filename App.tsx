@@ -276,19 +276,33 @@ const Dashboard = () => {
                         ) : contacts.length === 0 ? (
                             <div className="text-center p-4 text-gray-500 dark:text-gray-400">Aucun ami trouvé.</div>
                         ) : (
-                            contacts.map(contact => (
-                                <div 
-                                    key={contact.id} 
-                                    onClick={() => toggleContact(contact.id)}
-                                    className={`flex items-center p-3 rounded-lg cursor-pointer mb-1 transition-colors ${selectedContacts.includes(contact.id) ? 'bg-orange-100 dark:bg-orange-900/50 border border-orange-300 dark:border-orange-700' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent'}`}
-                                >
-                                    <div className={`w-5 h-5 rounded border mr-3 flex items-center justify-center ${selectedContacts.includes(contact.id) ? 'bg-orange-500 border-orange-500' : 'border-gray-400 bg-white dark:bg-gray-600 dark:border-gray-500'}`}>
-                                        {selectedContacts.includes(contact.id) && <Check size={14} className="text-white" />}
+                            contacts.map(contact => {
+                                const isOnline = onlineUsers.has(contact.id);
+                                return (
+                                    <div 
+                                        key={contact.id} 
+                                        onClick={() => toggleContact(contact.id)}
+                                        className={`flex items-center p-3 rounded-lg cursor-pointer mb-1 transition-colors ${selectedContacts.includes(contact.id) ? 'bg-orange-100 dark:bg-orange-900/50 border border-orange-300 dark:border-orange-700' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent'}`}
+                                    >
+                                        <div className={`w-5 h-5 rounded border mr-3 flex items-center justify-center ${selectedContacts.includes(contact.id) ? 'bg-orange-500 border-orange-500' : 'border-gray-400 bg-white dark:bg-gray-600 dark:border-gray-500'}`}>
+                                            {selectedContacts.includes(contact.id) && <Check size={14} className="text-white" />}
+                                        </div>
+                                        
+                                        {/* Avatar with Status Dot */}
+                                        <div className="relative mr-3">
+                                            <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center text-xs font-bold text-gray-600 dark:text-gray-300">
+                                                {contact.username.charAt(0).toUpperCase()}
+                                            </div>
+                                            <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-gray-800 ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+                                        </div>
+
+                                        <div className="flex flex-col">
+                                            <span className="font-medium dark:text-gray-200 text-sm">{contact.username}</span>
+                                            <span className="text-xs text-gray-500 dark:text-gray-400">#{contact.tag}</span>
+                                        </div>
                                     </div>
-                                    <span className="font-medium dark:text-gray-200">{contact.username}</span>
-                                    <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">#{contact.tag}</span>
-                                </div>
-                            ))
+                                );
+                            })
                         )}
                     </div>
 

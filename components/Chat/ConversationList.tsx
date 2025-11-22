@@ -91,8 +91,8 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                     `}>
                         {conv.is_group ? <Users size={20} /> : name.charAt(0).toUpperCase()}
                     </div>
-                    {isOnline && !conv.is_group && (
-                        <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-green-500 border-2 border-white dark:border-gray-900"></span>
+                    {!conv.is_group && (
+                        <span className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white dark:border-gray-900 ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`}></span>
                     )}
                 </div>
                 

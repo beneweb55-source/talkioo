@@ -21,6 +21,7 @@ const pool = new Pool({
 });
 
 // --- NOUVEAUTÉ PUSH : Configuration VAPID ---
+// Gardez ces clés SECRÈTES sur le serveur. Seule la PUBLIC_KEY est envoyée au Frontend.
 const VAPID_PUBLIC_KEY = 'BO0jxy7AYVB6ATgnUFQUhQABoryBL71cYKiYpGS4fAdANX26IGxT8EExhK1I4A7w25rFtqsYModfBWKPg8Ui3s4';
 const VAPID_PRIVATE_KEY = 'tJBBxPG0lEK5ZBAICN38ZBcdZ5rR6B4IoPwe8MxFUDA';
 
@@ -139,7 +140,7 @@ const sendPushNotification = async (targetUserId, payload) => {
                     'DELETE FROM push_subscriptions WHERE endpoint = $1',
                     [subRow.endpoint]
                 );
-                console.log(`Abonnement push expiré supprimé pour ${targetUserId}.`);
+                 console.log(`Abonnement push expiré supprimé pour ${targetUserId}.`);
             }
         }
     }
@@ -150,8 +151,6 @@ const sendPushNotification = async (targetUserId, payload) => {
 // --- API ROUTES ---
 
 // 1. AUTH & USERS
-// ... (Routes inchangées) ...
-
 app.post('/api/auth/register', async (req, res) => {
     const { username, email, password } = req.body;
     try {
@@ -249,8 +248,6 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
 
 
 // 2. CONVERSATIONS
-// ... (Routes inchangées) ...
-
 // Création d'une conversation (groupe ou chat privé)
 app.post('/api/conversations', authenticateToken, async (req, res) => {
     const { name, participantIds } = req.body; 
@@ -358,7 +355,6 @@ app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
     
     try {
         // 1. Trouver tous les messages dans la conversation que cet utilisateur n'a PAS encore lus.
-        // On exclut les messages envoyés par l'utilisateur lui-même (sender_id != userId)
         const messagesToReadRes = await pool.query(`
             SELECT m.id 
             FROM messages m
@@ -414,7 +410,6 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
 });
 
 // 3. MESSAGES
-
 // MODIFICATION : Ajout du read_count ET des infos du message répondu
 app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
     const conversationId = req.params.id;
@@ -461,7 +456,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
     }
 });
 
-// MODIFICATION MAJEURE : Ajout de la logique de PUSH Notification
+// MODIFICATION MAJEURE & OPTIMISATION : Ajout de la logique de PUSH Notification
 app.post('/api/messages', authenticateToken, async (req, res) => {
     const { conversation_id, content, replied_to_message_id } = req.body;
     const senderId = req.user.id; // Stocker pour plus de clarté
@@ -518,24 +513,17 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
 
         // --- NOUVEAUTÉ PUSH : Envoi de la notification ---
         
-        // a. Trouver tous les autres participants
-        const participantsRes = await pool.query(
-            'SELECT user_id FROM participants WHERE conversation_id = $1 AND user_id != $2',
+        // a. Optimisation : Trouver tous les autres participants HORS LIGNE avec une seule requête
+        const offlineRecipientsRes = await pool.query(
+            `SELECT u.id, u.is_online
+             FROM participants p
+             JOIN users u ON p.user_id = u.id
+             WHERE p.conversation_id = $1 AND p.user_id != $2 AND u.is_online = FALSE`,
             [conversation_id, senderId]
         );
-        const recipientIds = participantsRes.rows.map(row => row.user_id);
+        const offlineRecipientIds = offlineRecipientsRes.rows.map(row => row.id);
 
-        // b. Vérifier qui est hors ligne (uniquement ceux qui n'ont pas de socket_id)
-        const offlineUsersRes = await pool.query(
-            `SELECT id, is_online FROM users WHERE id = ANY($1::uuid[])`,
-            [recipientIds]
-        );
-
-        const offlineRecipientIds = offlineUsersRes.rows
-            .filter(user => !user.is_online)
-            .map(user => user.id);
-
-        // c. Préparer et envoyer la notification
+        // b. Préparer et envoyer la notification
         if (offlineRecipientIds.length > 0) {
             // Récupérer le nom de la conversation/groupe
             const convInfoRes = await pool.query(
@@ -560,6 +548,7 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
 
             for (const recipientId of offlineRecipientIds) {
                 // Envoi asynchrone pour ne pas bloquer la réponse de l'API
+                // L'absence de 'await' est intentionnelle ici
                 sendPushNotification(recipientId, pushPayload);
             }
         }
@@ -693,16 +682,22 @@ app.get('/api/push/vapid-public-key', (req, res) => {
 // -------------------------------------------------------------
 
 
-// 4. FRIEND REQUESTS (Pas de changement)
+// 4. FRIEND REQUESTS
 app.post('/api/friend_requests', authenticateToken, async (req, res) => {
     const { targetIdentifier } = req.body; // "Name#1234"
     const parts = targetIdentifier.split('#');
     if (parts.length !== 2) return res.status(400).json({ error: "Format Nom#1234 requis" });
 
+    // --- LOG DE DÉBOGAGE (AJOUTÉ) ---
+    const usernameToSearch = parts[0].trim();
+    const tagToSearch = parts[1].trim();
+    console.log(`[FriendRequest] Recherche de: ${usernameToSearch} avec le tag: ${tagToSearch}`);
+    // ------------------------------------
+
     try {
         const userRes = await pool.query(
             'SELECT id FROM users WHERE LOWER(username) = LOWER($1) AND tag = $2', 
-            [parts[0].trim(), parts[1].trim()]
+            [usernameToSearch, tagToSearch]
         );
         const targetUser = userRes.rows[0];
         

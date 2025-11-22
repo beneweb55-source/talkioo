@@ -39,7 +39,12 @@ const renderContent = (text: string) => {
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, onEdit, onDelete, onReply }) => {
   const isDeleted = !!message.deleted_at;
   const isEdited = !!message.updated_at && !isDeleted;
-  const isReadByOthers = (message.read_count || 0) > 1;
+  
+  // Logic: 
+  // 0 = Sent (read_count excludes sender)
+  // > 0 = Read by at least one other person
+  const readCount = message.read_count || 0;
+  const isReadByOthers = readCount > 0;
 
   // Swipe logic
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -166,8 +171,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
             </span>
             {isOwn && !isDeleted && (
                 isReadByOthers ? (
+                    // > 0: Double Blue Check (Read by someone else)
                     <CheckCheck size={14} className="opacity-100 text-blue-500 dark:text-blue-400" />
                 ) : (
+                    // 0: Single Gray Check (Sent)
                     <Check size={14} className="opacity-80 text-gray-400 dark:text-gray-300" />
                 )
             )}

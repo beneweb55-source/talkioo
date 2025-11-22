@@ -200,8 +200,8 @@ export const subscribeToReadReceipts = (conversationId: string, onReadUpdate: ()
         }
     };
     
-    socket.on('read_receipt_update', handler);
-    return () => socket.off('read_receipt_update', handler);
+    socket.on('READ_RECEIPT_UPDATE', handler);
+    return () => socket.off('READ_RECEIPT_UPDATE', handler);
 };
 
 export const subscribeToTypingEvents = (conversationId: string, onTyping: (userId: string, isTyping: boolean) => void) => {

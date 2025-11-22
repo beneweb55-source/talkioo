@@ -364,7 +364,7 @@ app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
             await pool.query(readQuery, readValues);
 
             // 3. Notifier TOUS les clients de cette conversation que le statut de lecture a changé
-            io.to(conversationId).emit('read_receipt_update', { conversationId: conversationId, readerId: userId });
+            io.to(conversationId).emit('READ_RECEIPT_UPDATE', { conversationId: conversationId, readerId: userId });
         }
         
         res.json({ success: true, count: messageIds.length });
@@ -403,11 +403,11 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
                 m.*, 
                 u.username, 
                 u.tag,
-                -- Statut de lecture (Total)
+                -- Statut de lecture (Compte uniquement les autres, exclut l'expéditeur)
                 (
                     SELECT COUNT(*) 
                     FROM message_reads mr 
-                    WHERE mr.message_id = m.id
+                    WHERE mr.message_id = m.id AND mr.user_id != m.sender_id
                 ) AS read_count,
                 -- Infos du message répondu
                 m2.content AS replied_to_content,
@@ -484,7 +484,7 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         const fullMsg = { 
             ...msg, 
             sender_username: `${sender.username}#${sender.tag}`, 
-            read_count: 1, // Lu par l'expéditeur lui-même
+            read_count: 0, // Initialisé à 0 car lu seulement par l'expéditeur (qui est exclu du compte)
             reply: replyData
         }; 
 
@@ -515,7 +515,12 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         // Récupérer les données pour l'envoi socket complet
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
-        const readCountRes = await pool.query('SELECT COUNT(*) FROM message_reads WHERE message_id = $1', [msg.id]);
+        
+        // Compter les lectures excluant l'expéditeur
+        const readCountRes = await pool.query(
+            'SELECT COUNT(*) FROM message_reads WHERE message_id = $1 AND user_id != $2', 
+            [msg.id, msg.sender_id]
+        );
         
         // On récupère les infos de réponse si elles existent
         let replyData = null;

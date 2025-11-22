@@ -62,7 +62,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             setLoading(false);
             setTimeout(scrollToBottom, 100);
             
-            // Mark as read
+            // 1. TRIGGER READ: On open conversation
             await markMessagesAsReadAPI(conversation.id);
         } catch(e) {
             console.error(e);
@@ -84,8 +84,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         
         if (!messages.find(m => m.id === newMessage.id)) {
             setTimeout(scrollToBottom, 100);
-            // Mark new incoming message as read if window is focused/open
-            markMessagesAsReadAPI(conversation.id);
+            // 2. TRIGGER READ: On incoming new message (if sender is not me)
+            if (newMessage.sender_id !== currentUser.id) {
+                markMessagesAsReadAPI(conversation.id);
+            }
         }
     });
 
@@ -98,8 +100,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         });
     });
     
+    // 3. LISTENER: Update UI when someone reads messages
     const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => {
-        // Refresh messages to update read counts
+        // Refresh messages to update read counts (Socket Event: READ_RECEIPT_UPDATE)
+        // We fetch silently without setting loading state to update ticks instantly
         getMessagesAPI(conversation.id).then(setMessages);
     });
 
@@ -108,7 +112,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         unsubscribeTyping();
         unsubscribeReads();
     };
-  }, [conversation.id]);
+  }, [conversation.id, currentUser.id]);
 
   // --- TYPING HANDLER ---
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {

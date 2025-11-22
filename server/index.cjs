@@ -5,6 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const webPush = require('web-push'); // --- NOUVEAUTÉ PUSH ---
 
 // --- CONFIGURATION ---
 const app = express();
@@ -19,6 +20,18 @@ const pool = new Pool({
     connectionString: connectionString,
 });
 
+// --- NOUVEAUTÉ PUSH : Configuration VAPID ---
+const VAPID_PUBLIC_KEY = 'BO0jxy7AYVB6ATgnUFQUhQABoryBL71cYKiYpGS4fAdANX26IGxT8EExhK1I4A7w25rFtqsYModfBWKPg8Ui3s4';
+const VAPID_PRIVATE_KEY = 'tJBBxPG0lEK5ZBAICN38ZBcdZ5rR6B4IoPwe8MxFUDA';
+
+webPush.setVapidDetails(
+    'mailto:tvmystral@gmail.com', // Remplacer par une adresse email réelle (contact en cas d'abus)
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
+);
+// ---------------------------------------------
+
+
 // --- MIDDLEWARE ---
 app.use(cors()); // Allow frontend to communicate
 app.use(express.json());
@@ -31,9 +44,9 @@ const io = new Server(server, {
     }
 });
 
-io.on('connection', async (socket) => { 
+io.on('connection', async (socket) => {
     // Assumes the Frontend sends the userId in the handshake query
-    const userId = socket.handshake.query.userId; 
+    const userId = socket.handshake.query.userId;
     console.log('User connected:', socket.id, 'User ID:', userId);
 
     if (userId) {
@@ -98,9 +111,46 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+// --- NOUVEAUTÉ PUSH : Fonction d'envoi de notification ---
+const sendPushNotification = async (targetUserId, payload) => {
+    const pushSubscriptionsRes = await pool.query(
+        'SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1',
+        [targetUserId]
+    );
+
+    for (const subRow of pushSubscriptionsRes.rows) {
+        const subscription = {
+            endpoint: subRow.endpoint,
+            keys: {
+                p256dh: subRow.p256dh,
+                auth: subRow.auth,
+            }
+        };
+
+        try {
+            await webPush.sendNotification(subscription, payload);
+            console.log(`Notification push envoyée à l'utilisateur ${targetUserId}`);
+        } catch (error) {
+            console.error(`Erreur envoi notification pour ${targetUserId}:`, error.statusCode, error.message);
+            
+            // Si l'abonnement n'est plus valide (404/410), on le supprime
+            if (error.statusCode === 404 || error.statusCode === 410) {
+                 await pool.query(
+                    'DELETE FROM push_subscriptions WHERE endpoint = $1',
+                    [subRow.endpoint]
+                );
+                console.log(`Abonnement push expiré supprimé pour ${targetUserId}.`);
+            }
+        }
+    }
+};
+// -----------------------------------------------------------
+
+
 // --- API ROUTES ---
 
 // 1. AUTH & USERS
+// ... (Routes inchangées) ...
 
 app.post('/api/auth/register', async (req, res) => {
     const { username, email, password } = req.body;
@@ -199,6 +249,7 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
 
 
 // 2. CONVERSATIONS
+// ... (Routes inchangées) ...
 
 // Création d'une conversation (groupe ou chat privé)
 app.post('/api/conversations', authenticateToken, async (req, res) => {
@@ -258,10 +309,10 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
     try {
         const query = `
             SELECT c.*, 
-                   p.last_deleted_at,
-                   (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_content,
-                   (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_time,
-                   (SELECT deleted_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_deleted
+                    p.last_deleted_at,
+                    (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_content,
+                    (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_time,
+                    (SELECT deleted_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_deleted
             FROM conversations c
             JOIN participants p ON c.id = p.conversation_id
             WHERE p.user_id = $1
@@ -410,38 +461,39 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
     }
 });
 
-// MODIFICATION : Ajout de la colonne replied_to_message_id dans l'insertion
+// MODIFICATION MAJEURE : Ajout de la logique de PUSH Notification
 app.post('/api/messages', authenticateToken, async (req, res) => {
     const { conversation_id, content, replied_to_message_id } = req.body;
+    const senderId = req.user.id; // Stocker pour plus de clarté
     try {
         const result = await pool.query(
             'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id) VALUES ($1, $2, $3, $4) RETURNING *',
-            [conversation_id, req.user.id, content, replied_to_message_id || null] 
+            [conversation_id, senderId, content, replied_to_message_id || null] 
         );
         const msg = result.rows[0];
 
         // 1. Marquer le message comme lu par l'expéditeur (soi-même)
         await pool.query(
             'INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT (message_id, user_id) DO NOTHING',
-            [msg.id, req.user.id]
+            [msg.id, senderId]
         );
 
         // 2. Reset soft delete for everyone in conversation
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
 
         // 3. Get sender info
-        const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [req.user.id]);
+        const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [senderId]);
         const sender = userRes.rows[0];
         
         // 4. Récupérer les infos de réponse pour le broadcast
         let replyData = null;
         if (msg.replied_to_message_id) {
-             const replyRes = await pool.query(`
-                SELECT m2.content, u2.username, u2.tag 
-                FROM messages m2
-                LEFT JOIN users u2 ON m2.sender_id = u2.id
-                WHERE m2.id = $1
-            `, [msg.replied_to_message_id]);
+              const replyRes = await pool.query(`
+                  SELECT m2.content, u2.username, u2.tag 
+                  FROM messages m2
+                  LEFT JOIN users u2 ON m2.sender_id = u2.id
+                  WHERE m2.id = $1
+              `, [msg.replied_to_message_id]);
             
             const r = replyRes.rows[0];
             if (r) {
@@ -463,12 +515,62 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
 
         // 5. Socket Broadcast
         io.to(conversation_id).emit('new_message', fullMsg);
+
+        // --- NOUVEAUTÉ PUSH : Envoi de la notification ---
+        
+        // a. Trouver tous les autres participants
+        const participantsRes = await pool.query(
+            'SELECT user_id FROM participants WHERE conversation_id = $1 AND user_id != $2',
+            [conversation_id, senderId]
+        );
+        const recipientIds = participantsRes.rows.map(row => row.user_id);
+
+        // b. Vérifier qui est hors ligne (uniquement ceux qui n'ont pas de socket_id)
+        const offlineUsersRes = await pool.query(
+            `SELECT id, is_online FROM users WHERE id = ANY($1::uuid[])`,
+            [recipientIds]
+        );
+
+        const offlineRecipientIds = offlineUsersRes.rows
+            .filter(user => !user.is_online)
+            .map(user => user.id);
+
+        // c. Préparer et envoyer la notification
+        if (offlineRecipientIds.length > 0) {
+            // Récupérer le nom de la conversation/groupe
+            const convInfoRes = await pool.query(
+                'SELECT name, is_group FROM conversations WHERE id = $1',
+                [conversation_id]
+            );
+            const convInfo = convInfoRes.rows[0];
+
+            const title = convInfo.is_group 
+                ? `${sender.username}#${sender.tag} dans ${convInfo.name}`
+                : `${sender.username}#${sender.tag}`;
+            
+            const pushPayload = JSON.stringify({
+                title: title,
+                body: fullMsg.content.substring(0, 100) + (fullMsg.content.length > 100 ? '...' : ''),
+                icon: '/logo192.png', // Chemin vers une icône pour la notification
+                data: {
+                    conversationId: conversation_id,
+                    senderId: senderId,
+                }
+            });
+
+            for (const recipientId of offlineRecipientIds) {
+                // Envoi asynchrone pour ne pas bloquer la réponse de l'API
+                sendPushNotification(recipientId, pushPayload);
+            }
+        }
+        // ---------------------------------------------------
         
         res.json(fullMsg);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+
 
 app.put('/api/messages/:id', authenticateToken, async (req, res) => {
     const { content } = req.body;
@@ -488,12 +590,12 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         // On récupère les infos de réponse si elles existent
         let replyData = null;
         if (msg.replied_to_message_id) {
-             const replyRes = await pool.query(`
-                SELECT m2.content, u2.username, u2.tag 
-                FROM messages m2
-                LEFT JOIN users u2 ON m2.sender_id = u2.id
-                WHERE m2.id = $1
-            `, [msg.replied_to_message_id]);
+              const replyRes = await pool.query(`
+                  SELECT m2.content, u2.username, u2.tag 
+                  FROM messages m2
+                  LEFT JOIN users u2 ON m2.sender_id = u2.id
+                  WHERE m2.id = $1
+              `, [msg.replied_to_message_id]);
             
             const r = replyRes.rows[0];
             if (r) {
@@ -536,6 +638,60 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+
+// --- NOUVEAUTÉ PUSH : Routes pour gérer l'abonnement du Frontend ---
+
+app.post('/api/push/subscribe', authenticateToken, async (req, res) => {
+    const { endpoint, keys } = req.body;
+    const userId = req.user.id;
+    
+    if (!endpoint || !keys || !keys.p256dh || !keys.auth) {
+        return res.status(400).json({ error: "Les données d'abonnement sont incomplètes." });
+    }
+
+    try {
+        await pool.query(
+            `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) 
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (user_id, endpoint) DO UPDATE 
+             SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, created_at = NOW()`, // Mettre à jour si déjà existant
+            [userId, endpoint, keys.p256dh, keys.auth]
+        );
+        
+        res.status(201).json({ success: true, message: "Abonnement push enregistré." });
+    } catch (err) {
+        console.error("Erreur d'enregistrement d'abonnement push:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/push/unsubscribe', authenticateToken, async (req, res) => {
+    const { endpoint } = req.body;
+    const userId = req.user.id;
+
+    try {
+        const result = await pool.query(
+            'DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2',
+            [userId, endpoint]
+        );
+
+        if (result.rowCount > 0) {
+            res.json({ success: true, message: "Abonnement push supprimé." });
+        } else {
+            res.status(404).json({ error: "Abonnement non trouvé." });
+        }
+    } catch (err) {
+        console.error("Erreur de suppression d'abonnement push:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/push/vapid-public-key', (req, res) => {
+    res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+// -------------------------------------------------------------
+
 
 // 4. FRIEND REQUESTS (Pas de changement)
 app.post('/api/friend_requests', authenticateToken, async (req, res) => {

@@ -5,7 +5,6 @@ const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const webPush = require('web-push'); // --- NOUVEAUTÉ PUSH ---
 
 // --- CONFIGURATION ---
 const app = express();
@@ -20,19 +19,6 @@ const pool = new Pool({
     connectionString: connectionString,
 });
 
-// --- NOUVEAUTÉ PUSH : Configuration VAPID ---
-// Gardez ces clés SECRÈTES sur le serveur. Seule la PUBLIC_KEY est envoyée au Frontend.
-const VAPID_PUBLIC_KEY = 'BO0jxy7AYVB6ATgnUFQUhQABoryBL71cYKiYpGS4fAdANX26IGxT8EExhK1I4A7w25rFtqsYModfBWKPg8Ui3s4';
-const VAPID_PRIVATE_KEY = 'tJBBxPG0lEK5ZBAICN38ZBcdZ5rR6B4IoPwe8MxFUDA';
-
-webPush.setVapidDetails(
-    'mailto:tvmystral@gmail.com', // Remplacer par une adresse email réelle (contact en cas d'abus)
-    VAPID_PUBLIC_KEY,
-    VAPID_PRIVATE_KEY
-);
-// ---------------------------------------------
-
-
 // --- MIDDLEWARE ---
 app.use(cors()); // Allow frontend to communicate
 app.use(express.json());
@@ -45,9 +31,9 @@ const io = new Server(server, {
     }
 });
 
-io.on('connection', async (socket) => {
+io.on('connection', async (socket) => { 
     // Assumes the Frontend sends the userId in the handshake query
-    const userId = socket.handshake.query.userId;
+    const userId = socket.handshake.query.userId; 
     console.log('User connected:', socket.id, 'User ID:', userId);
 
     if (userId) {
@@ -112,45 +98,10 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
-// --- NOUVEAUTÉ PUSH : Fonction d'envoi de notification ---
-const sendPushNotification = async (targetUserId, payload) => {
-    const pushSubscriptionsRes = await pool.query(
-        'SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1',
-        [targetUserId]
-    );
-
-    for (const subRow of pushSubscriptionsRes.rows) {
-        const subscription = {
-            endpoint: subRow.endpoint,
-            keys: {
-                p256dh: subRow.p256dh,
-                auth: subRow.auth,
-            }
-        };
-
-        try {
-            await webPush.sendNotification(subscription, payload);
-            console.log(`Notification push envoyée à l'utilisateur ${targetUserId}`);
-        } catch (error) {
-            console.error(`Erreur envoi notification pour ${targetUserId}:`, error.statusCode, error.message);
-            
-            // Si l'abonnement n'est plus valide (404/410), on le supprime
-            if (error.statusCode === 404 || error.statusCode === 410) {
-                 await pool.query(
-                    'DELETE FROM push_subscriptions WHERE endpoint = $1',
-                    [subRow.endpoint]
-                );
-                 console.log(`Abonnement push expiré supprimé pour ${targetUserId}.`);
-            }
-        }
-    }
-};
-// -----------------------------------------------------------
-
-
 // --- API ROUTES ---
 
 // 1. AUTH & USERS
+
 app.post('/api/auth/register', async (req, res) => {
     const { username, email, password } = req.body;
     try {
@@ -248,6 +199,7 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
 
 
 // 2. CONVERSATIONS
+
 // Création d'une conversation (groupe ou chat privé)
 app.post('/api/conversations', authenticateToken, async (req, res) => {
     const { name, participantIds } = req.body; 
@@ -306,10 +258,10 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
     try {
         const query = `
             SELECT c.*, 
-                    p.last_deleted_at,
-                    (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_content,
-                    (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_time,
-                    (SELECT deleted_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_deleted
+                   p.last_deleted_at,
+                   (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_content,
+                   (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_time,
+                   (SELECT deleted_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_deleted
             FROM conversations c
             JOIN participants p ON c.id = p.conversation_id
             WHERE p.user_id = $1
@@ -410,6 +362,7 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
 });
 
 // 3. MESSAGES
+
 // MODIFICATION : Ajout du read_count ET des infos du message répondu
 app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
     const conversationId = req.params.id;
@@ -421,7 +374,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
                 m.*, 
                 u.username, 
                 u.tag,
-                -- Statut de lecture : Compte combien de personnes AUTRES que l'utilisateur courant ont lu
+                -- Statut de lecture
                 (
                     SELECT COUNT(*) 
                     FROM message_reads mr 
@@ -446,7 +399,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
             // Création de l'objet reply pour le Frontend
             reply: m.replied_to_message_id ? {
                 id: m.replied_to_message_id,
-                content: m.replied_to_content || 'Message original supprimé', 
+                content: m.replied_to_content || 'Message original supprimé', // Gérer le cas si le message original est soft-deleted
                 sender: m.replied_to_username ? `${m.replied_to_username}#${m.replied_to_tag}` : 'Utilisateur inconnu'
             } : null
         }));
@@ -456,39 +409,38 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
     }
 });
 
-// MODIFICATION MAJEURE & OPTIMISATION : Ajout de la logique de PUSH Notification
+// MODIFICATION : Ajout de la colonne replied_to_message_id dans l'insertion
 app.post('/api/messages', authenticateToken, async (req, res) => {
     const { conversation_id, content, replied_to_message_id } = req.body;
-    const senderId = req.user.id; // Stocker pour plus de clarté
     try {
         const result = await pool.query(
             'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id) VALUES ($1, $2, $3, $4) RETURNING *',
-            [conversation_id, senderId, content, replied_to_message_id || null] 
+            [conversation_id, req.user.id, content, replied_to_message_id || null] // Gère le cas où c'est NULL
         );
         const msg = result.rows[0];
 
-        // 1. Marquer le message comme lu par l'expéditeur (soi-même)
+        // 1. Marquer le message comme lu par l'expéditeur
         await pool.query(
             'INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT (message_id, user_id) DO NOTHING',
-            [msg.id, senderId]
+            [msg.id, req.user.id]
         );
 
         // 2. Reset soft delete for everyone in conversation
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
 
         // 3. Get sender info
-        const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [senderId]);
+        const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [req.user.id]);
         const sender = userRes.rows[0];
         
         // 4. Récupérer les infos de réponse pour le broadcast
         let replyData = null;
         if (msg.replied_to_message_id) {
              const replyRes = await pool.query(`
-                    SELECT m2.content, u2.username, u2.tag 
-                    FROM messages m2
-                    LEFT JOIN users u2 ON m2.sender_id = u2.id
-                    WHERE m2.id = $1
-                `, [msg.replied_to_message_id]);
+                SELECT m2.content, u2.username, u2.tag 
+                FROM messages m2
+                LEFT JOIN users u2 ON m2.sender_id = u2.id
+                WHERE m2.id = $1
+            `, [msg.replied_to_message_id]);
             
             const r = replyRes.rows[0];
             if (r) {
@@ -503,63 +455,18 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         const fullMsg = { 
             ...msg, 
             sender_username: `${sender.username}#${sender.tag}`, 
-            // On initialise à 0 car personne d'autre ne l'a encore lu
-            read_count: 0, 
+            read_count: 1, // Lu par l'expéditeur lui-même
             reply: replyData
         }; 
 
         // 5. Socket Broadcast
         io.to(conversation_id).emit('new_message', fullMsg);
-
-        // --- NOUVEAUTÉ PUSH : Envoi de la notification ---
-        
-        // a. Optimisation : Trouver tous les autres participants HORS LIGNE avec une seule requête
-        const offlineRecipientsRes = await pool.query(
-            `SELECT u.id, u.is_online
-             FROM participants p
-             JOIN users u ON p.user_id = u.id
-             WHERE p.conversation_id = $1 AND p.user_id != $2 AND u.is_online = FALSE`,
-            [conversation_id, senderId]
-        );
-        const offlineRecipientIds = offlineRecipientsRes.rows.map(row => row.id);
-
-        // b. Préparer et envoyer la notification
-        if (offlineRecipientIds.length > 0) {
-            // Récupérer le nom de la conversation/groupe
-            const convInfoRes = await pool.query(
-                'SELECT name, is_group FROM conversations WHERE id = $1',
-                [conversation_id]
-            );
-            const convInfo = convInfoRes.rows[0];
-
-            const title = convInfo.is_group 
-                ? `${sender.username}#${sender.tag} dans ${convInfo.name}`
-                : `${sender.username}#${sender.tag}`;
-            
-            const pushPayload = JSON.stringify({
-                title: title,
-                body: fullMsg.content.substring(0, 100) + (fullMsg.content.length > 100 ? '...' : ''),
-                icon: '/logo192.png', // Chemin vers une icône pour la notification
-                data: {
-                    conversationId: conversation_id,
-                    senderId: senderId,
-                }
-            });
-
-            for (const recipientId of offlineRecipientIds) {
-                // Envoi asynchrone pour ne pas bloquer la réponse de l'API
-                // L'absence de 'await' est intentionnelle ici
-                sendPushNotification(recipientId, pushPayload);
-            }
-        }
-        // ---------------------------------------------------
         
         res.json(fullMsg);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
-
 
 app.put('/api/messages/:id', authenticateToken, async (req, res) => {
     const { content } = req.body;
@@ -573,18 +480,17 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         // Récupérer les données pour l'envoi socket complet
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
-        // Compter les lecteurs autres que l'utilisateur
         const readCountRes = await pool.query('SELECT COUNT(*) FROM message_reads WHERE message_id = $1 AND user_id != $2', [msg.id, req.user.id]);
         
         // On récupère les infos de réponse si elles existent
         let replyData = null;
         if (msg.replied_to_message_id) {
              const replyRes = await pool.query(`
-                    SELECT m2.content, u2.username, u2.tag 
-                    FROM messages m2
-                    LEFT JOIN users u2 ON m2.sender_id = u2.id
-                    WHERE m2.id = $1
-                `, [msg.replied_to_message_id]);
+                SELECT m2.content, u2.username, u2.tag 
+                FROM messages m2
+                LEFT JOIN users u2 ON m2.sender_id = u2.id
+                WHERE m2.id = $1
+            `, [msg.replied_to_message_id]);
             
             const r = replyRes.rows[0];
             if (r) {
@@ -599,7 +505,7 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         const fullMsg = { 
             ...msg, 
             sender_username: `${sender.username}#${sender.tag}`,
-            read_count: parseInt(readCountRes.rows[0].count),
+            read_count: parseInt(readCountRes.rows[0].count) + 1, // +1 car on exclut l'expéditeur dans le count DB
             reply: replyData
         };
 
@@ -619,6 +525,7 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
         const msg = result.rows[0];
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
+        
         const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
 
         io.to(msg.conversation_id).emit('message_update', fullMsg);
@@ -628,88 +535,18 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
     }
 });
 
-
-// --- NOUVEAUTÉ PUSH : Routes pour gérer l'abonnement du Frontend ---
-
-app.post('/api/push/subscribe', authenticateToken, async (req, res) => {
-    const { endpoint, keys } = req.body;
-    const userId = req.user.id;
-    
-    if (!endpoint || !keys || !keys.p256dh || !keys.auth) {
-        return res.status(400).json({ error: "Les données d'abonnement sont incomplètes." });
-    }
-
-    try {
-        await pool.query(
-            `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) 
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (user_id, endpoint) DO UPDATE 
-             SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, created_at = NOW()`, // Mettre à jour si déjà existant
-            [userId, endpoint, keys.p256dh, keys.auth]
-        );
-        
-        res.status(201).json({ success: true, message: "Abonnement push enregistré." });
-    } catch (err) {
-        console.error("Erreur d'enregistrement d'abonnement push:", err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.post('/api/push/unsubscribe', authenticateToken, async (req, res) => {
-    const { endpoint } = req.body;
-    const userId = req.user.id;
-
-    try {
-        const result = await pool.query(
-            'DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2',
-            [userId, endpoint]
-        );
-
-        if (result.rowCount > 0) {
-            res.json({ success: true, message: "Abonnement push supprimé." });
-        } else {
-            res.status(404).json({ error: "Abonnement non trouvé." });
-        }
-    } catch (err) {
-        console.error("Erreur de suppression d'abonnement push:", err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.get('/api/push/vapid-public-key', (req, res) => {
-    res.json({ publicKey: VAPID_PUBLIC_KEY });
-});
-// -------------------------------------------------------------
-
-
 // 4. FRIEND REQUESTS
 app.post('/api/friend_requests', authenticateToken, async (req, res) => {
     const { targetIdentifier } = req.body; // "Name#1234"
     const parts = targetIdentifier.split('#');
     if (parts.length !== 2) return res.status(400).json({ error: "Format Nom#1234 requis" });
 
-    const usernameToSearch = parts[0].trim();
-    const tagToSearch = parts[1].trim();
-    
-    // --- Ligne de débogage (Utile pour vérifier les valeurs) ---
-    console.log(`[FriendRequest] Recherche de: Username: "${usernameToSearch}", Tag: "${tagToSearch}"`);
-    // ------------------------------------------------------------
-    
     try {
         const userRes = await pool.query(
-            // --- CORRECTION APPLIQUÉE ICI ---
-            // On utilise UPPER pour s'assurer que si l'utilisateur est stocké comme 'Meli' ou 'meli',
-            // la comparaison fonctionne, tout en exigeant que le tag soit exact.
-            'SELECT id FROM users WHERE UPPER(username) = UPPER($1) AND tag = $2', 
-            [usernameToSearch, tagToSearch] // $1 est 'Meli' (ou 'meli'), $2 est '1866'
+            'SELECT id FROM users WHERE LOWER(username) = LOWER($1) AND tag = $2', 
+            [parts[0].trim(), parts[1].trim()]
         );
         const targetUser = userRes.rows[0];
-        
-        // --- LOG DE DÉBOGAGE (AJOUTÉ) ---
-        if (!targetUser) {
-             console.log("[FriendRequest] Échec: Utilisateur non trouvé.");
-        }
-        // ---------------------------------
         
         if (!targetUser) return res.status(404).json({ error: "Utilisateur introuvable" });
         if (targetUser.id === req.user.id) return res.status(400).json({ error: "Impossible de s'ajouter soi-même" });
@@ -738,7 +575,6 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
         res.json({ success: true });
 
     } catch (err) {
-        console.error("Erreur complète du serveur lors de la demande d'ami:", err);
         res.status(500).json({ error: err.message });
     }
 });

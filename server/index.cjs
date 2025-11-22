@@ -307,6 +307,7 @@ app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
     
     try {
         // 1. Trouver tous les messages dans la conversation que cet utilisateur n'a PAS encore lus.
+        // On exclut les messages envoyés par l'utilisateur lui-même (sender_id != userId)
         const messagesToReadRes = await pool.query(`
             SELECT m.id 
             FROM messages m
@@ -374,7 +375,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
                 m.*, 
                 u.username, 
                 u.tag,
-                -- Statut de lecture
+                -- Statut de lecture : Compte combien de personnes AUTRES que l'utilisateur courant ont lu
                 (
                     SELECT COUNT(*) 
                     FROM message_reads mr 
@@ -399,7 +400,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
             // Création de l'objet reply pour le Frontend
             reply: m.replied_to_message_id ? {
                 id: m.replied_to_message_id,
-                content: m.replied_to_content || 'Message original supprimé', // Gérer le cas si le message original est soft-deleted
+                content: m.replied_to_content || 'Message original supprimé', 
                 sender: m.replied_to_username ? `${m.replied_to_username}#${m.replied_to_tag}` : 'Utilisateur inconnu'
             } : null
         }));
@@ -415,11 +416,11 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(
             'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id) VALUES ($1, $2, $3, $4) RETURNING *',
-            [conversation_id, req.user.id, content, replied_to_message_id || null] // Gère le cas où c'est NULL
+            [conversation_id, req.user.id, content, replied_to_message_id || null] 
         );
         const msg = result.rows[0];
 
-        // 1. Marquer le message comme lu par l'expéditeur
+        // 1. Marquer le message comme lu par l'expéditeur (soi-même)
         await pool.query(
             'INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT (message_id, user_id) DO NOTHING',
             [msg.id, req.user.id]
@@ -455,7 +456,8 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         const fullMsg = { 
             ...msg, 
             sender_username: `${sender.username}#${sender.tag}`, 
-            read_count: 1, // Lu par l'expéditeur lui-même
+            // On initialise à 0 car personne d'autre ne l'a encore lu
+            read_count: 0, 
             reply: replyData
         }; 
 
@@ -480,6 +482,7 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         // Récupérer les données pour l'envoi socket complet
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
+        // Compter les lecteurs autres que l'utilisateur
         const readCountRes = await pool.query('SELECT COUNT(*) FROM message_reads WHERE message_id = $1 AND user_id != $2', [msg.id, req.user.id]);
         
         // On récupère les infos de réponse si elles existent
@@ -505,7 +508,7 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         const fullMsg = { 
             ...msg, 
             sender_username: `${sender.username}#${sender.tag}`,
-            read_count: parseInt(readCountRes.rows[0].count) + 1, // +1 car on exclut l'expéditeur dans le count DB
+            read_count: parseInt(readCountRes.rows[0].count),
             reply: replyData
         };
 
@@ -525,7 +528,6 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
         const msg = result.rows[0];
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
-        
         const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
 
         io.to(msg.conversation_id).emit('message_update', fullMsg);
@@ -535,7 +537,7 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// 4. FRIEND REQUESTS
+// 4. FRIEND REQUESTS (Pas de changement)
 app.post('/api/friend_requests', authenticateToken, async (req, res) => {
     const { targetIdentifier } = req.body; // "Name#1234"
     const parts = targetIdentifier.split('#');

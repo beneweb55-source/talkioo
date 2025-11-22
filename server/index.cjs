@@ -483,12 +483,12 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         // 4. Récupérer les infos de réponse pour le broadcast
         let replyData = null;
         if (msg.replied_to_message_id) {
-              const replyRes = await pool.query(`
-                  SELECT m2.content, u2.username, u2.tag 
-                  FROM messages m2
-                  LEFT JOIN users u2 ON m2.sender_id = u2.id
-                  WHERE m2.id = $1
-              `, [msg.replied_to_message_id]);
+             const replyRes = await pool.query(`
+                    SELECT m2.content, u2.username, u2.tag 
+                    FROM messages m2
+                    LEFT JOIN users u2 ON m2.sender_id = u2.id
+                    WHERE m2.id = $1
+                `, [msg.replied_to_message_id]);
             
             const r = replyRes.rows[0];
             if (r) {
@@ -579,12 +579,12 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         // On récupère les infos de réponse si elles existent
         let replyData = null;
         if (msg.replied_to_message_id) {
-              const replyRes = await pool.query(`
-                  SELECT m2.content, u2.username, u2.tag 
-                  FROM messages m2
-                  LEFT JOIN users u2 ON m2.sender_id = u2.id
-                  WHERE m2.id = $1
-              `, [msg.replied_to_message_id]);
+             const replyRes = await pool.query(`
+                    SELECT m2.content, u2.username, u2.tag 
+                    FROM messages m2
+                    LEFT JOIN users u2 ON m2.sender_id = u2.id
+                    WHERE m2.id = $1
+                `, [msg.replied_to_message_id]);
             
             const r = replyRes.rows[0];
             if (r) {
@@ -688,18 +688,28 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
     const parts = targetIdentifier.split('#');
     if (parts.length !== 2) return res.status(400).json({ error: "Format Nom#1234 requis" });
 
-    // --- LOG DE DÉBOGAGE (AJOUTÉ) ---
     const usernameToSearch = parts[0].trim();
     const tagToSearch = parts[1].trim();
-    console.log(`[FriendRequest] Recherche de: ${usernameToSearch} avec le tag: ${tagToSearch}`);
-    // ------------------------------------
-
+    
+    // --- Ligne de débogage (Utile pour vérifier les valeurs) ---
+    console.log(`[FriendRequest] Recherche de: Username: "${usernameToSearch}", Tag: "${tagToSearch}"`);
+    // ------------------------------------------------------------
+    
     try {
         const userRes = await pool.query(
-            'SELECT id FROM users WHERE LOWER(username) = LOWER($1) AND tag = $2', 
-            [usernameToSearch, tagToSearch]
+            // --- CORRECTION APPLIQUÉE ICI ---
+            // On utilise UPPER pour s'assurer que si l'utilisateur est stocké comme 'Meli' ou 'meli',
+            // la comparaison fonctionne, tout en exigeant que le tag soit exact.
+            'SELECT id FROM users WHERE UPPER(username) = UPPER($1) AND tag = $2', 
+            [usernameToSearch, tagToSearch] // $1 est 'Meli' (ou 'meli'), $2 est '1866'
         );
         const targetUser = userRes.rows[0];
+        
+        // --- LOG DE DÉBOGAGE (AJOUTÉ) ---
+        if (!targetUser) {
+             console.log("[FriendRequest] Échec: Utilisateur non trouvé.");
+        }
+        // ---------------------------------
         
         if (!targetUser) return res.status(404).json({ error: "Utilisateur introuvable" });
         if (targetUser.id === req.user.id) return res.status(400).json({ error: "Impossible de s'ajouter soi-même" });
@@ -728,6 +738,7 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
         res.json({ success: true });
 
     } catch (err) {
+        console.error("Erreur complète du serveur lors de la demande d'ami:", err);
         res.status(500).json({ error: err.message });
     }
 });

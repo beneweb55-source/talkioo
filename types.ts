@@ -4,6 +4,7 @@ export interface User {
   tag: string; // ex: 1234
   email: string;
   created_at: string;
+  is_online?: boolean;
 }
 
 export interface Conversation {

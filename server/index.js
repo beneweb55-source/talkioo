@@ -9,17 +9,17 @@ const jwt = require('jsonwebtoken');
 // --- CONFIGURATION ---
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.PORT || 3001; 
-const JWT_SECRET = process.env.JWT_SECRET || 'talkio_super_secret_key_2024';
+const PORT = process.env.PORT || 3001; // Backend Port
+const JWT_SECRET = 'super_secret_key_change_this_in_prod';
 
-// --- BASE DE DONNÉES NEON ---
+// Use the connection string you provided
 const connectionString = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_XPSO1Fe6aqZk@ep-misty-queen-agi42tnv-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require';
 
 const pool = new Pool({
-  connectionString: connectionString,
-  ssl: {
-    rejectUnauthorized: false
-  }
+    connectionString: connectionString,
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
 
 // --- MIDDLEWARE ---
@@ -27,7 +27,7 @@ app.use(cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
-}));
+})); 
 app.use(express.json());
 
 // --- SOCKET.IO SETUP ---
@@ -35,16 +35,15 @@ const io = new Server(server, {
     cors: {
         origin: "*", // Allow all origins for MVP
         methods: ["GET", "POST"]
-    },
-    transports: ['websocket', 'polling']
+    }
 });
 
-io.on('connection', async (socket) => { 
-    // Assumes the Frontend sends the userId in the handshake query or auth
-    const userId = socket.handshake.query.userId || socket.handshake.auth?.token ? jwt.decode(socket.handshake.auth.token)?.id : null;
-    
+io.on('connection', async (socket) => {
+    // Assumes the Frontend sends the userId in the handshake query
+    const userId = socket.handshake.query.userId;
+    console.log('User connected:', socket.id, 'User ID:', userId);
+
     if (userId) {
-        console.log('User connected:', socket.id, 'User ID:', userId);
         try {
             // METTRE À JOUR LE STATUT EN LIGNE
             await pool.query(
@@ -53,7 +52,7 @@ io.on('connection', async (socket) => {
             );
             
             // Notifier le changement de statut à tous
-            io.emit('user_status', { userId: userId, isOnline: true }); 
+            io.emit('USER_STATUS_UPDATE', { userId: userId, isOnline: true }); 
             
             socket.join(`user:${userId}`);
         } catch (err) {
@@ -63,13 +62,14 @@ io.on('connection', async (socket) => {
 
     socket.on('join_room', (roomId) => {
         socket.join(roomId);
+        console.log(`User ${socket.id} joined room ${roomId}`);
     });
     
-    socket.on('join_user_channel', (uid) => {
-        socket.join(`user:${uid}`);
+    socket.on('join_user_channel', (userId) => {
+        socket.join(`user:${userId}`);
     });
 
-    // Typing Indicators
+    // Typing Indicators (Ajouté pour compatibilité avec le frontend existant)
     socket.on('typing_start', ({ conversationId }) => {
         if (!userId) return;
         socket.to(conversationId).emit('typing_update', { conversationId, userId: userId, isTyping: true });
@@ -95,7 +95,7 @@ io.on('connection', async (socket) => {
                     [disconnectedUserId]
                 );
                 // Notifier le changement de statut à tous
-                io.emit('user_status', { userId: disconnectedUserId, isOnline: false });
+                io.emit('USER_STATUS_UPDATE', { userId: disconnectedUserId, isOnline: false });
             }
         } catch (err) {
             console.error("Erreur mise à jour déconnexion statut:", err.message);
@@ -116,12 +116,12 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+
 // --- API ROUTES ---
 
 app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
 
 // 1. AUTH & USERS
-
 app.post('/api/auth/register', async (req, res) => {
     let { username, email, password } = req.body;
     email = email.toLowerCase().trim();
@@ -170,13 +170,25 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 
-// Récupère tous les utilisateurs en ligne (Doit être avant :id)
+// Récupère tous les utilisateurs en ligne
 app.get('/api/users/online', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE is_online = TRUE');
+        // Retourne la liste des IDs pour le Set() coté client
+        const result = await pool.query('SELECT id FROM users WHERE is_online = TRUE');
         res.json(result.rows.map(u => u.id));
     } catch (err) {
         console.error("Erreur lors de la récupération des utilisateurs en ligne:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+// Récupère un utilisateur par ID
+app.get('/api/users/:id', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE id = $1', [req.params.id]);
+        res.json(result.rows[0]);
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
@@ -211,19 +223,8 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
     }
 });
 
-// Récupère un utilisateur par ID (Wildcard - Doit être après routes spécifiques)
-app.get('/api/users/:id', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE id = $1', [req.params.id]);
-        res.json(result.rows[0]);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 
 // 2. CONVERSATIONS
-
 // Création d'une conversation (groupe ou chat privé)
 app.post('/api/conversations', authenticateToken, async (req, res) => {
     const { name, participantIds } = req.body; 
@@ -263,13 +264,13 @@ app.post('/api/conversations', authenticateToken, async (req, res) => {
         
         await pool.query(participantsQuery, participantValues);
         
-        // 4. Envoyer un message système (facultatif)
+        // 4. Envoyer un message système
         await pool.query(
              'INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)',
              [conversationId, userId, is_group ? `👋 Le groupe "${name}" a été créé !` : '👋 Nouvelle discussion privée.']
         );
-        
-        // Notify
+
+        // Notifier les participants
         allParticipants.forEach(uid => {
             io.to(`user:${uid}`).emit('conversation_added', { conversationId });
         });
@@ -287,10 +288,10 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
     try {
         const query = `
             SELECT c.*, 
-                   p.last_deleted_at,
-                   (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_content,
-                   (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_time,
-                   (SELECT deleted_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_deleted
+                    p.last_deleted_at,
+                    (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_content,
+                    (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_time,
+                    (SELECT deleted_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_deleted
             FROM conversations c
             JOIN participants p ON c.id = p.conversation_id
             WHERE p.user_id = $1
@@ -329,7 +330,7 @@ app.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// NOUVELLE ROUTE : Marquer tous les messages d'une conversation comme lus
+// Marquer tous les messages d'une conversation comme lus
 app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
     const conversationId = req.params.id;
     const userId = req.user.id;
@@ -391,8 +392,6 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
 });
 
 // 3. MESSAGES
-
-// MODIFICATION : Ajout du read_count ET des infos du message répondu
 app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
     const conversationId = req.params.id;
     const userId = req.user.id;
@@ -403,11 +402,11 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
                 m.*, 
                 u.username, 
                 u.tag,
-                -- Statut de lecture (Compte uniquement les autres, exclut l'expéditeur)
+                -- Statut de lecture : Compte combien de personnes AUTRES que l'utilisateur courant ont lu
                 (
                     SELECT COUNT(*) 
                     FROM message_reads mr 
-                    WHERE mr.message_id = m.id AND mr.user_id != m.sender_id
+                    WHERE mr.message_id = m.id AND mr.user_id != $2
                 ) AS read_count,
                 -- Infos du message répondu
                 m2.content AS replied_to_content,
@@ -419,16 +418,15 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
             LEFT JOIN users u2 ON m2.sender_id = u2.id
             WHERE m.conversation_id = $1
             ORDER BY m.created_at ASC
-        `, [conversationId]);
+        `, [conversationId, userId]);
         
         const messages = result.rows.map(m => ({
             ...m,
             sender_username: m.username ? `${m.username}#${m.tag}` : 'Inconnu',
-            read_count: parseInt(m.read_count || 0),
-            // Création de l'objet reply pour le Frontend
+            read_count: parseInt(m.read_count),
             reply: m.replied_to_message_id ? {
                 id: m.replied_to_message_id,
-                content: m.replied_to_content || 'Message original supprimé', // Gérer le cas si le message original est soft-deleted
+                content: m.replied_to_content || 'Message original supprimé', 
                 sender: m.replied_to_username ? `${m.replied_to_username}#${m.replied_to_tag}` : 'Utilisateur inconnu'
             } : null
         }));
@@ -438,38 +436,38 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
     }
 });
 
-// MODIFICATION : Ajout de la colonne replied_to_message_id dans l'insertion
 app.post('/api/messages', authenticateToken, async (req, res) => {
     const { conversation_id, content, replied_to_message_id } = req.body;
+    const senderId = req.user.id; 
     try {
         const result = await pool.query(
             'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id) VALUES ($1, $2, $3, $4) RETURNING *',
-            [conversation_id, req.user.id, content, replied_to_message_id || null] // Gère le cas où c'est NULL
+            [conversation_id, senderId, content, replied_to_message_id || null] 
         );
         const msg = result.rows[0];
 
-        // 1. Marquer le message comme lu par l'expéditeur
+        // 1. Marquer le message comme lu par l'expéditeur (soi-même)
         await pool.query(
             'INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT (message_id, user_id) DO NOTHING',
-            [msg.id, req.user.id]
+            [msg.id, senderId]
         );
 
         // 2. Reset soft delete for everyone in conversation
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
 
         // 3. Get sender info
-        const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [req.user.id]);
+        const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [senderId]);
         const sender = userRes.rows[0];
         
         // 4. Récupérer les infos de réponse pour le broadcast
         let replyData = null;
         if (msg.replied_to_message_id) {
              const replyRes = await pool.query(`
-                SELECT m2.content, u2.username, u2.tag 
-                FROM messages m2
-                LEFT JOIN users u2 ON m2.sender_id = u2.id
-                WHERE m2.id = $1
-            `, [msg.replied_to_message_id]);
+                    SELECT m2.content, u2.username, u2.tag 
+                    FROM messages m2
+                    LEFT JOIN users u2 ON m2.sender_id = u2.id
+                    WHERE m2.id = $1
+                `, [msg.replied_to_message_id]);
             
             const r = replyRes.rows[0];
             if (r) {
@@ -484,24 +482,25 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         const fullMsg = { 
             ...msg, 
             sender_username: `${sender.username}#${sender.tag}`, 
-            read_count: 0, // Initialisé à 0 car lu seulement par l'expéditeur (qui est exclu du compte)
+            read_count: 0, 
             reply: replyData
         }; 
 
         // 5. Socket Broadcast
         io.to(conversation_id).emit('new_message', fullMsg);
         
-        // Notify list updates
+        // Also notify list updates
         const parts = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversation_id]);
         parts.rows.forEach(row => {
             io.to(`user:${row.user_id}`).emit('conversation_updated', { conversationId: conversation_id });
         });
-
+        
         res.json(fullMsg);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+
 
 app.put('/api/messages/:id', authenticateToken, async (req, res) => {
     const { content } = req.body;
@@ -512,25 +511,18 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
         );
         const msg = result.rows[0];
         
-        // Récupérer les données pour l'envoi socket complet
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
+        const readCountRes = await pool.query('SELECT COUNT(*) FROM message_reads WHERE message_id = $1 AND user_id != $2', [msg.id, req.user.id]);
         
-        // Compter les lectures excluant l'expéditeur
-        const readCountRes = await pool.query(
-            'SELECT COUNT(*) FROM message_reads WHERE message_id = $1 AND user_id != $2', 
-            [msg.id, msg.sender_id]
-        );
-        
-        // On récupère les infos de réponse si elles existent
         let replyData = null;
         if (msg.replied_to_message_id) {
              const replyRes = await pool.query(`
-                SELECT m2.content, u2.username, u2.tag 
-                FROM messages m2
-                LEFT JOIN users u2 ON m2.sender_id = u2.id
-                WHERE m2.id = $1
-            `, [msg.replied_to_message_id]);
+                    SELECT m2.content, u2.username, u2.tag 
+                    FROM messages m2
+                    LEFT JOIN users u2 ON m2.sender_id = u2.id
+                    WHERE m2.id = $1
+                `, [msg.replied_to_message_id]);
             
             const r = replyRes.rows[0];
             if (r) {
@@ -565,7 +557,6 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
         const msg = result.rows[0];
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];
-        
         const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}` };
 
         io.to(msg.conversation_id).emit('message_update', fullMsg);
@@ -575,16 +566,27 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
     }
 });
 
+
 // 4. FRIEND REQUESTS
 app.post('/api/friend_requests', authenticateToken, async (req, res) => {
     const { targetIdentifier } = req.body; // "Name#1234"
-    const parts = targetIdentifier.split('#');
-    if (parts.length !== 2) return res.status(400).json({ error: "Format Nom#1234 requis" });
+    if (!targetIdentifier) return res.status(400).json({ error: "Identifiant requis" });
 
+    // --- CORRECTION APPLIQUÉE ICI (Split plus robuste) ---
+    const lastHashIndex = targetIdentifier.lastIndexOf('#');
+    if (lastHashIndex === -1) return res.status(400).json({ error: "Format Nom#1234 requis" });
+
+    const usernameToSearch = targetIdentifier.substring(0, lastHashIndex).trim();
+    const tagToSearch = targetIdentifier.substring(lastHashIndex + 1).trim();
+    
+    console.log(`[FriendRequest] Recherche: "${usernameToSearch}" #${tagToSearch}`);
+    
     try {
         const userRes = await pool.query(
-            'SELECT id FROM users WHERE LOWER(username) = LOWER($1) AND tag = $2', 
-            [parts[0].trim(), parts[1].trim()]
+            // On utilise UPPER pour s'assurer que si l'utilisateur est stocké comme 'Meli' ou 'meli',
+            // la comparaison fonctionne.
+            'SELECT id FROM users WHERE UPPER(username) = UPPER($1) AND tag = $2', 
+            [usernameToSearch, tagToSearch] 
         );
         const targetUser = userRes.rows[0];
         
@@ -615,6 +617,7 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
         res.json({ success: true });
 
     } catch (err) {
+        console.error("Erreur complète du serveur lors de la demande d'ami:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -663,7 +666,6 @@ app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res)
             // System Message
             await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [convId, request.receiver_id, '👋 Ami accepté !']);
 
-            // Notify both
             io.to(`user:${request.sender_id}`).emit('conversation_added', { conversationId: convId });
             io.to(`user:${request.receiver_id}`).emit('conversation_added', { conversationId: convId });
 
@@ -675,6 +677,7 @@ app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res)
         res.status(500).json({ error: err.message });
     }
 });
+
 
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

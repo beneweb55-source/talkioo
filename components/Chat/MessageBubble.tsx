@@ -41,7 +41,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   const isEdited = !!message.updated_at && !isDeleted;
   
   // Logic: 
-  // 0 = Sent (read_count excludes sender)
+  // 0 = Sent (read_count excludes sender now)
   // > 0 = Read by at least one other person
   const readCount = message.read_count || 0;
   const isReadByOthers = readCount > 0;
@@ -171,10 +171,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
             </span>
             {isOwn && !isDeleted && (
                 isReadByOthers ? (
-                    // > 0: Double Blue Check (Read by someone else)
+                    // Double check blue if read by others (>0)
                     <CheckCheck size={14} className="opacity-100 text-blue-500 dark:text-blue-400" />
                 ) : (
-                    // 0: Single Gray Check (Sent)
+                    // Single check gray if only I sent it (0)
                     <Check size={14} className="opacity-80 text-gray-400 dark:text-gray-300" />
                 )
             )}

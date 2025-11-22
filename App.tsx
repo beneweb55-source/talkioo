@@ -17,48 +17,41 @@ import {
   getOnlineUsersAPI,
   subscribeToUserStatus
 } from './services/api';
-import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy, RefreshCw, Users, Plus, Moon, Sun } from 'lucide-react';
+import { usePushNotifications } from './hooks/usePushNotifications';
+import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy, RefreshCw, Users, Moon, Sun } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
-import { AnimatePresence, motion } from 'framer-motion';
-
-const slideVariants = {
-  initial: { x: '100%' },
-  animate: { x: 0 },
-  exit: { x: '100%' }
-};
 
 const Dashboard = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, token } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   
-  // Global App State
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const [isDarkMode, setIsDarkMode] = useState(false);
 
-  // Notifications & Requests
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadNotifsCount, setUnreadNotifsCount] = useState(0);
   const [refreshingNotifs, setRefreshingNotifs] = useState(false);
 
-  // Friend Modal State
   const [isFriendModalOpen, setIsFriendModalOpen] = useState(false);
   const [newChatTarget, setNewChatTarget] = useState('');
   const [friendModalLoading, setFriendModalLoading] = useState(false);
   const [friendModalError, setFriendModalError] = useState('');
   const [friendModalSuccess, setFriendModalSuccess] = useState('');
 
-  // Group Modal State
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [contacts, setContacts] = useState<User[]>([]);
   const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
   const [groupLoading, setGroupLoading] = useState(false);
 
-  // Theme Toggle Logic
+  // --- ACTIVATE PUSH NOTIFICATIONS ---
+  usePushNotifications(user?.id);
+  // -----------------------------------
+
   const toggleTheme = () => {
     setIsDarkMode(!isDarkMode);
     if (!isDarkMode) {
@@ -68,31 +61,6 @@ const Dashboard = () => {
     }
   };
 
-  // --- HISTORY MANAGEMENT ---
-  useEffect(() => {
-      const handlePopState = (event: PopStateEvent) => {
-          // If the event state is null or doesn't imply chat is open, close it
-          // This handles the "Back" button on mobile to return to the list
-          setActiveConversationId(null);
-      };
-
-      window.addEventListener('popstate', handlePopState);
-      return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  const handleSelectConversation = (id: string) => {
-      setActiveConversationId(id);
-      // Push state so that "Back" button works
-      window.history.pushState({ chatOpen: true, chatId: id }, "");
-  };
-
-  const handleCloseConversation = () => {
-      // Trigger standard browser back to pop the state we pushed
-      // This will trigger the popstate listener which sets activeConversationId(null)
-      window.history.back();
-  };
-
-  // Fetch Data Functions
   const fetchConversations = async () => {
       if(!user) return;
       try {
@@ -118,14 +86,21 @@ const Dashboard = () => {
       }
   };
 
-  // Initial Load + Realtime Subscriptions
+  const fetchContacts = async () => {
+      try {
+          const friends = await getContactsAPI();
+          // Ensure uniqueness just in case
+          const uniqueFriends = Array.from(new Map(friends.map(f => [f.id, f])).values());
+          setContacts(uniqueFriends);
+      } catch (e) { console.error(e); }
+  };
+
   useEffect(() => {
     if (!user) return;
 
     const init = async () => {
         setLoading(true);
-        await Promise.all([fetchConversations(), fetchRequests()]);
-        // Init Online Users
+        await Promise.all([fetchConversations(), fetchRequests(), fetchContacts()]);
         const online = await getOnlineUsersAPI();
         setOnlineUsers(new Set(online));
         setLoading(false);
@@ -141,12 +116,18 @@ const Dashboard = () => {
     });
 
     const unsubscribeStatus = subscribeToUserStatus((userId, isOnline) => {
+        // 1. Update Online Users SET (Used by ConversationList)
         setOnlineUsers(prev => {
             const next = new Set(prev);
             if (isOnline) next.add(userId);
             else next.delete(userId);
             return next;
         });
+
+        // 2. Update Contacts List State (Explicitly requested)
+        setContacts(prevContacts => prevContacts.map(c => 
+            c.id === userId ? { ...c, is_online: isOnline } : c
+        ));
     });
 
     return () => {
@@ -154,7 +135,7 @@ const Dashboard = () => {
         unsubscribeConvs();
         unsubscribeStatus();
     };
-  }, [user]);
+  }, [user, token]);
 
   const handleSendFriendRequest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,36 +165,24 @@ const Dashboard = () => {
 
   const handleRespondToRequest = async (requestId: string, status: 'accepted' | 'rejected') => {
       try {
-        // Optimistic update
         setFriendRequests(prev => prev.filter(r => r.id !== requestId));
         setUnreadNotifsCount(prev => Math.max(0, prev - 1));
-        
         await respondToFriendRequestAPI(requestId, status);
-        
         if (status === 'accepted') {
             fetchConversations();
+            fetchContacts(); // Reload contacts on accept
         }
       } catch (err) {
           console.error("Erreur réponse demande", err);
-          fetchRequests(); // Revert on error
+          fetchRequests();
       }
   };
 
-  // --- GROUP LOGIC ---
-
   const openGroupModal = async () => {
       setIsGroupModalOpen(true);
-      setGroupLoading(true);
-      try {
-          const friends = await getContactsAPI();
-          // Filter duplicates using Map by ID
-          const uniqueFriends = Array.from(new Map(friends.map(f => [f.id, f])).values());
-          setContacts(uniqueFriends);
-      } catch (e) {
-          console.error("Failed to load contacts", e);
-      } finally {
-          setGroupLoading(false);
-      }
+      // Contacts are already fetched in init(), we just open the modal.
+      // Optionally we could refresh silently:
+      // fetchContacts(); 
   };
 
   const toggleContact = (id: string) => {
@@ -231,7 +200,7 @@ const Dashboard = () => {
           setGroupName('');
           setSelectedContacts([]);
           await fetchConversations();
-          handleSelectConversation(res.conversationId);
+          setActiveConversationId(res.conversationId);
       } catch (e) {
           alert("Erreur création groupe");
       } finally {
@@ -256,10 +225,8 @@ const Dashboard = () => {
 
   return (
     <div className="flex h-[100dvh] w-full bg-gray-100 dark:bg-gray-900 overflow-hidden relative font-sans text-gray-900 dark:text-gray-100">
-      
-      {/* Modal: Ajouter un ami */}
       {isFriendModalOpen && (
-        <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200 border border-gray-100 dark:border-gray-700">
                 <button onClick={() => setIsFriendModalOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><X size={24} /></button>
                 <div className="flex items-center gap-3 mb-4">
@@ -280,9 +247,8 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Modal: Créer Groupe */}
       {isGroupModalOpen && (
-        <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200 h-[80vh] flex flex-col border border-gray-100 dark:border-gray-700">
                 <div className="flex justify-between items-center mb-4">
                     <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
@@ -307,33 +273,24 @@ const Dashboard = () => {
                         ) : contacts.length === 0 ? (
                             <div className="text-center p-4 text-gray-500 dark:text-gray-400">Aucun ami trouvé.</div>
                         ) : (
-                            contacts.map(contact => {
-                                const isOnline = onlineUsers.has(contact.id);
-                                return (
-                                    <div 
-                                        key={contact.id} 
-                                        onClick={() => toggleContact(contact.id)}
-                                        className={`flex items-center p-3 rounded-lg cursor-pointer mb-1 transition-colors ${selectedContacts.includes(contact.id) ? 'bg-orange-100 dark:bg-orange-900/50 border border-orange-300 dark:border-orange-700' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent'}`}
-                                    >
-                                        <div className={`w-5 h-5 rounded border mr-3 flex items-center justify-center ${selectedContacts.includes(contact.id) ? 'bg-orange-500 border-orange-500' : 'border-gray-400 bg-white dark:bg-gray-600 dark:border-gray-500'}`}>
-                                            {selectedContacts.includes(contact.id) && <Check size={14} className="text-white" />}
-                                        </div>
-                                        
-                                        {/* Avatar with Status Dot */}
-                                        <div className="relative mr-3">
-                                            <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center text-xs font-bold text-gray-600 dark:text-gray-300">
-                                                {contact.username.charAt(0).toUpperCase()}
-                                            </div>
-                                            <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-gray-800 ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`}></span>
-                                        </div>
-
-                                        <div className="flex flex-col">
-                                            <span className="font-medium dark:text-gray-200 text-sm">{contact.username}</span>
-                                            <span className="text-xs text-gray-500 dark:text-gray-400">#{contact.tag}</span>
-                                        </div>
+                            contacts.map(contact => (
+                                <div 
+                                    key={contact.id} 
+                                    onClick={() => toggleContact(contact.id)}
+                                    className={`flex items-center p-3 rounded-lg cursor-pointer mb-1 transition-colors ${selectedContacts.includes(contact.id) ? 'bg-orange-100 dark:bg-orange-900/50 border border-orange-300 dark:border-orange-700' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent'}`}
+                                >
+                                    <div className={`w-5 h-5 rounded border mr-3 flex items-center justify-center ${selectedContacts.includes(contact.id) ? 'bg-orange-500 border-orange-500' : 'border-gray-400 bg-white dark:bg-gray-600 dark:border-gray-500'}`}>
+                                        {selectedContacts.includes(contact.id) && <Check size={14} className="text-white" />}
                                     </div>
-                                );
-                            })
+                                    <div className="flex flex-col">
+                                        <span className="font-medium dark:text-gray-200 flex items-center gap-2">
+                                            {contact.username}
+                                            {contact.is_online && <span className="w-2 h-2 bg-green-500 rounded-full" title="En ligne"></span>}
+                                        </span>
+                                        <span className="text-xs text-gray-500 dark:text-gray-400">#{contact.tag}</span>
+                                    </div>
+                                </div>
+                            ))
                         )}
                     </div>
 
@@ -347,9 +304,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Sidebar - Full width on mobile, fixed width on desktop */}
-      <div className="w-full md:w-[350px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col z-10 shadow-sm flex-shrink-0 h-full">
-        {/* Sidebar Header */}
+      <div className="w-[350px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col z-10 shadow-sm flex-shrink-0">
         <div className="h-16 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-gray-50 dark:bg-gray-900 shrink-0">
             <div className="flex items-center gap-2 overflow-hidden cursor-pointer group" onClick={copyToClipboard} title="Copier mon ID">
                 <div className="h-9 w-9 bg-orange-600 rounded-full flex items-center justify-center text-white font-bold shadow-sm group-hover:scale-105 transition-transform">
@@ -363,19 +318,12 @@ const Dashboard = () => {
                 </div>
             </div>
             <div className="flex items-center gap-1">
-                <button 
-                    onClick={toggleTheme}
-                    className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors"
-                >
+                <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition-colors">
                     {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
                 </button>
 
-                {/* Notifications */}
                 <div className="relative">
-                    <button 
-                        onClick={() => setShowNotifications(!showNotifications)}
-                        className={`p-2 rounded-full transition-colors relative ${showNotifications ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400' : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
-                    >
+                    <button onClick={() => setShowNotifications(!showNotifications)} className={`p-2 rounded-full transition-colors relative ${showNotifications ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400' : 'hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
                         <Bell size={20} />
                         {unreadNotifsCount > 0 && (
                             <span className="absolute top-1 right-1 h-2.5 w-2.5 bg-red-500 rounded-full border-2 border-white dark:border-gray-900"></span>
@@ -429,7 +377,6 @@ const Dashboard = () => {
              </button>
         </div>
 
-        {/* Conversation List */}
         {loading ? (
             <div className="flex-1 flex items-center justify-center">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-600"></div>
@@ -438,7 +385,7 @@ const Dashboard = () => {
             <ConversationList 
                 conversations={conversations} 
                 activeId={activeConversationId} 
-                onSelect={handleSelectConversation}
+                onSelect={setActiveConversationId}
                 onDelete={handleDeleteConversation}
                 currentUser={user!}
                 onlineUsers={onlineUsers}
@@ -446,14 +393,12 @@ const Dashboard = () => {
         )}
       </div>
 
-      {/* Chat Area (Desktop) - Hidden on mobile */}
-      <div className="hidden md:flex flex-1 flex-col bg-[#e5ddd5] dark:bg-[#0b141a] relative transition-colors duration-300">
+      <div className="flex-1 flex flex-col bg-[#e5ddd5] dark:bg-[#0b141a] relative transition-colors duration-300">
         {activeConversation ? (
             <ChatWindow 
                 conversation={activeConversation} 
                 currentUser={user!} 
                 onlineUsers={onlineUsers}
-                onBack={() => setActiveConversationId(null)}
             />
         ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-400 bg-[#f0f2f5] dark:bg-[#0b141a] pattern-bg">
@@ -465,27 +410,6 @@ const Dashboard = () => {
             </div>
         )}
       </div>
-
-      {/* Mobile Chat Overlay (Animated) */}
-      <AnimatePresence>
-        {activeConversation && (
-            <motion.div 
-                variants={slideVariants}
-                initial="initial"
-                animate="animate"
-                exit="exit"
-                transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                className="md:hidden fixed inset-0 z-50 bg-[#e5ddd5] dark:bg-[#0b141a] h-[100dvh] w-full flex flex-col"
-            >
-                <ChatWindow 
-                    conversation={activeConversation} 
-                    currentUser={user!} 
-                    onlineUsers={onlineUsers}
-                    onBack={handleCloseConversation}
-                />
-            </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 };

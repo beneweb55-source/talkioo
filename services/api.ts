@@ -15,15 +15,14 @@ console.log(`[Talkio] Connecting to Backend: ${API_BASE}`);
 // --- SOCKET INSTANCE ---
 let socket: Socket;
 
-export const connectSocket = (token: string) => {
+export const connectSocket = (token: string, userId: string) => {
     if (socket && socket.connected) return;
     
-    // Retrieve userId to map socket_id in DB for Online Status
-    const userId = localStorage.getItem('talkio_current_user_id');
-
+    // IMPORTANT: Sending userId in query is crucial for the backend to link socketID <-> UserID
+    // for online status updates.
     socket = io(API_BASE, {
         auth: { token },
-        query: { userId },
+        query: { userId }, 
         transports: ['websocket', 'polling'], 
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
@@ -165,6 +164,19 @@ export const respondToFriendRequestAPI = async (requestId: string, status: 'acce
     if (status === 'accepted' && res.conversationId) return { id: res.conversationId } as Conversation;
     return null;
 };
+
+// --- PUSH NOTIFICATIONS ---
+export const getVapidPublicKeyAPI = async (): Promise<{ publicKey: string }> => {
+    return await fetchWithAuth('/push/vapid-public-key');
+};
+
+export const subscribeToPushAPI = async (subscription: PushSubscription): Promise<any> => {
+    return await fetchWithAuth('/push/subscribe', {
+        method: 'POST',
+        body: JSON.stringify(subscription)
+    });
+};
+
 
 // --- TYPING EVENTS ---
 export const sendTypingEvent = (conversationId: string) => {

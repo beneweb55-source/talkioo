@@ -103,7 +103,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     // 3. LISTENER: Update UI when someone reads messages
     const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => {
         // Refresh messages to update read counts (Socket Event: READ_RECEIPT_UPDATE)
-        // We fetch silently without setting loading state to update ticks instantly
+        // We fetch silently without setting loading state to update ticks
         getMessagesAPI(conversation.id).then(setMessages);
     });
 

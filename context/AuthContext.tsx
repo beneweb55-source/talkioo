@@ -28,8 +28,8 @@ export const AuthProvider = ({ children }: PropsWithChildren<{}>) => {
                   if (foundUser) {
                       setUser(foundUser);
                       setToken(storedToken);
-                      // Reconnect Socket
-                      connectSocket(storedToken);
+                      // Reconnect Socket with UserID
+                      connectSocket(storedToken, foundUser.id);
                   } else {
                       throw new Error("User not found");
                   }
@@ -49,7 +49,7 @@ export const AuthProvider = ({ children }: PropsWithChildren<{}>) => {
     localStorage.setItem('talkio_auth_token', authToken);
     setUser(userData);
     setToken(authToken);
-    connectSocket(authToken);
+    connectSocket(authToken, userData.id);
   };
 
   const logout = () => {

@@ -40,71 +40,115 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   const isDeleted = !!message.deleted_at;
   const isEdited = !!message.updated_at && !isDeleted;
   
-  // Logic: 
-  // 0 = Sent (read_count excludes sender now)
-  // > 0 = Read by at least one other person
   const readCount = message.read_count || 0;
   const isReadByOthers = readCount > 0;
 
-  // Swipe logic
-  const [touchStart, setTouchStart] = useState<number | null>(null);
-  const [translateX, setTranslateX] = useState(0);
+  // --- SWIPE LOGIC ---
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const swipingRef = useRef(false);
 
   const onTouchStart = (e: React.TouchEvent) => {
-      setTouchStart(e.targetTouches[0].clientX);
+      touchStartRef.current = {
+          x: e.targetTouches[0].clientX,
+          y: e.targetTouches[0].clientY
+      };
+      setIsSwiping(false);
+      swipingRef.current = false;
   };
 
   const onTouchMove = (e: React.TouchEvent) => {
-      if (touchStart === null) return;
-      const current = e.targetTouches[0].clientX;
-      const diff = current - touchStart;
+      if (!touchStartRef.current || !onReply) return;
+
+      const currentX = e.targetTouches[0].clientX;
+      const currentY = e.targetTouches[0].clientY;
       
-      // Only allow dragging to the right for reply
-      if (diff > 0 && diff < 100) {
-          setTranslateX(diff);
+      const diffX = currentX - touchStartRef.current.x;
+      const diffY = currentY - touchStartRef.current.y;
+
+      // Lock Logic: If user scrolls vertically more than horizontally, ignore the swipe
+      // This prevents accidental swipes while scrolling the chat history
+      if (!swipingRef.current && Math.abs(diffY) > Math.abs(diffX)) {
+          touchStartRef.current = null; // Stop tracking for this interaction
+          return;
+      }
+
+      // Only allow swiping RIGHT (positive diffX)
+      if (diffX > 0) {
+          swipingRef.current = true;
+          setIsSwiping(true);
+          
+          // Elastic resistance effect
+          // Up to 80px it follows 1:1, after that it slows down (logarithmic feel)
+          const dampening = diffX > 80 ? 80 + (diffX - 80) * 0.3 : diffX;
+          
+          // Cap max visual drag to avoid pushing element off screen too much
+          setSwipeOffset(Math.min(dampening, 150)); 
       }
   };
 
   const onTouchEnd = () => {
-      if (translateX > 50 && onReply) {
+      const THRESHOLD = 60;
+      
+      if (swipeOffset > THRESHOLD && onReply) {
           onReply(message);
+          // Haptic feedback if available
+          if (navigator.vibrate) navigator.vibrate(15);
       }
-      setTranslateX(0);
-      setTouchStart(null);
+      
+      // Reset
+      setSwipeOffset(0);
+      setIsSwiping(false);
+      touchStartRef.current = null;
+      swipingRef.current = false;
   };
+
+  // Determine Opacity/Scale of the Reply Icon based on drag distance
+  const iconScale = Math.min(swipeOffset / 50, 1); // 0 to 1
+  const iconOpacity = Math.min(swipeOffset / 40, 1);
 
   return (
     <div 
-        className={`flex w-full mb-3 ${isOwn ? 'justify-end' : 'justify-start'} group relative`}
+        className={`flex w-full mb-3 ${isOwn ? 'justify-end' : 'justify-start'} group relative select-none`}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
     >
-      {/* Swipe Indicator (Visible during swipe) */}
-      {translateX > 0 && (
-          <div className="absolute left-0 top-1/2 -translate-y-1/2 text-gray-400 bg-gray-100 p-2 rounded-full z-0" style={{ transform: `translateX(${translateX > 50 ? 10 : 0}px)` }}>
-              <Reply size={20} />
+      {/* Swipe Indicator (Hidden by default, visible during swipe) */}
+      <div 
+          className="absolute left-0 top-1/2 -translate-y-1/2 z-0 flex items-center justify-center pl-2 pointer-events-none transition-transform duration-75"
+          style={{ 
+              opacity: iconOpacity,
+              transform: `translateY(-50%) scale(${iconScale})`,
+              left: isOwn ? 'auto' : 0, 
+              right: isOwn ? '100%' : 'auto',
+              marginRight: isOwn ? -40 : 0
+          }}
+      >
+          <div className="bg-gray-200 dark:bg-gray-700 p-2 rounded-full text-gray-600 dark:text-gray-300 shadow-sm">
+             <Reply size={20} />
           </div>
-      )}
+      </div>
 
       <div 
-        className="flex items-end gap-2 max-w-[85%] transition-transform duration-200 z-10"
-        style={{ transform: `translateX(${translateX}px)` }}
+        className={`flex items-end gap-2 max-w-[85%] z-10 relative ${isSwiping ? '' : 'transition-transform duration-300 ease-out'}`}
+        style={{ transform: `translateX(${swipeOffset}px)` }}
       >
-        {/* Reply Button (Desktop - Appears on Left for Own, Right for Other) */}
+        {/* Desktop Reply Button (Hover Only) */}
         {onReply && !isDeleted && (
              <button 
                 onClick={() => onReply(message)}
-                className={`opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-white dark:hover:bg-gray-600 text-gray-500 dark:text-gray-300 rounded-full shadow-sm mb-2 ${isOwn ? 'order-first' : 'order-last'}`}
+                className={`hidden md:block opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-white dark:hover:bg-gray-600 text-gray-500 dark:text-gray-300 rounded-full shadow-sm mb-2 ${isOwn ? 'order-first' : 'order-last'}`}
                 title="Répondre"
              >
                 <Reply size={14} />
              </button>
         )}
 
-        {/* Actions Menu (Edit/Delete) */}
+        {/* Desktop Actions Menu (Edit/Delete) - Hidden on Touch devices usually handled by context menu or long press in full apps, here accessible via hover on desktop */}
         {isOwn && !isDeleted && (
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1 mb-2">
+            <div className="hidden md:flex opacity-0 group-hover:opacity-100 transition-opacity flex-col gap-1 mb-2">
                 {onEdit && (
                     <button 
                         onClick={() => onEdit(message)} 
@@ -127,7 +171,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         )}
 
         <div
-          className={`relative px-4 py-2 shadow-sm transition-all flex flex-col ${
+          className={`relative px-4 py-2 shadow-sm flex flex-col ${
             isOwn 
               ? 'bg-[#d9fdd3] dark:bg-orange-700 text-gray-900 dark:text-white rounded-2xl rounded-tr-sm' 
               : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-2xl rounded-tl-sm'
@@ -171,10 +215,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
             </span>
             {isOwn && !isDeleted && (
                 isReadByOthers ? (
-                    // Double check blue if read by others (>0)
                     <CheckCheck size={14} className="opacity-100 text-blue-500 dark:text-blue-400" />
                 ) : (
-                    // Single check gray if only I sent it (0)
                     <Check size={14} className="opacity-80 text-gray-400 dark:text-gray-300" />
                 )
             )}

@@ -23,7 +23,6 @@ export const AuthScreen: React.FC = () => {
     setLoading(true);
     setShowWakeUpMessage(false);
 
-    // Si la requête prend plus de 2 secondes, c'est probablement que Render se réveille
     const wakeUpTimer = setTimeout(() => {
         setShowWakeUpMessage(true);
     }, 2500);
@@ -46,24 +45,24 @@ export const AuthScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 transition-colors">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md">
+    <div className="min-h-[100dvh] bg-gray-50 dark:bg-gray-900 flex flex-col justify-center py-8 px-4 sm:px-6 lg:px-8 transition-colors">
+      <div className="sm:mx-auto sm:w-full sm:max-w-md mb-8">
         <div className="flex justify-center">
-            <div className="h-14 w-14 bg-orange-600 rounded-xl shadow-lg flex items-center justify-center transform rotate-3 hover:rotate-0 transition-transform duration-300">
-                <MessageCircleCode className="text-white" size={32} />
+            <div className="h-16 w-16 bg-orange-600 rounded-2xl shadow-xl flex items-center justify-center transform rotate-3 hover:rotate-0 transition-transform duration-300">
+                <MessageCircleCode className="text-white" size={40} />
             </div>
         </div>
         <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-white tracking-tight">
-          Bienvenue sur <span className="text-orange-600">Talkio</span>
+          <span className="text-orange-600">Talkio</span> Web
         </h2>
         <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
-          {isLogin ? 'Connectez-vous à votre compte' : 'Rejoignez la conversation'}
+          {isLogin ? 'Bon retour parmi nous !' : 'Créez votre compte en 30s'}
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white dark:bg-gray-800 py-8 px-4 shadow-xl shadow-orange-100/50 dark:shadow-black/30 sm:rounded-lg sm:px-10 border border-gray-100 dark:border-gray-700 transition-colors">
-          <form className="space-y-2" onSubmit={handleSubmit}>
+      <div className="sm:mx-auto sm:w-full sm:max-w-md">
+        <div className="bg-white dark:bg-gray-800 py-8 px-6 shadow-2xl shadow-orange-100/50 dark:shadow-black/30 rounded-2xl sm:px-10 border border-gray-100 dark:border-gray-700 transition-colors">
+          <form className="space-y-5" onSubmit={handleSubmit}>
             {!isLogin && (
               <Input
                 label="Nom d'utilisateur"
@@ -72,6 +71,7 @@ export const AuthScreen: React.FC = () => {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="ex: Alex"
+                className="py-3"
               />
             )}
             <Input
@@ -81,6 +81,7 @@ export const AuthScreen: React.FC = () => {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="vous@exemple.com"
+              className="py-3"
             />
             <Input
               label="Mot de passe"
@@ -89,44 +90,44 @@ export const AuthScreen: React.FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
+              className="py-3"
             />
 
             {error && (
-              <div className="text-red-600 text-sm bg-red-50 dark:bg-red-900/20 dark:text-red-400 p-3 rounded-md border border-red-100 dark:border-red-900/30 animate-in fade-in">
+              <div className="text-red-600 text-sm bg-red-50 dark:bg-red-900/20 dark:text-red-400 p-4 rounded-xl border border-red-100 dark:border-red-900/30 animate-in fade-in">
                 {error}
               </div>
             )}
 
-            {/* Message Spécial Serveur Render */}
             {showWakeUpMessage && (
-                <div className="text-blue-600 text-sm bg-blue-50 dark:bg-blue-900/20 dark:text-blue-400 p-3 rounded-md border border-blue-100 dark:border-blue-900/30 flex items-start gap-2 animate-in fade-in">
+                <div className="text-blue-600 text-sm bg-blue-50 dark:bg-blue-900/20 dark:text-blue-400 p-4 rounded-xl border border-blue-100 dark:border-blue-900/30 flex items-start gap-2 animate-in fade-in">
                     <CloudLightning className="flex-shrink-0 mt-0.5" size={18} />
                     <span>
-                        Le serveur sort de veille, cela peut prendre environ 30 secondes. Merci de patienter... 🚀
+                        Le serveur démarre, merci de patienter... 🚀
                     </span>
                 </div>
             )}
 
-            <div className="pt-4">
-              <Button type="submit" isLoading={loading} className="bg-orange-600 hover:bg-orange-700 focus:ring-orange-500">
+            <div className="pt-2">
+              <Button type="submit" isLoading={loading} className="bg-orange-600 hover:bg-orange-700 focus:ring-orange-500 h-12 text-lg font-semibold shadow-lg shadow-orange-200 dark:shadow-none">
                 {isLogin ? 'Se connecter' : "S'inscrire"}
               </Button>
             </div>
           </form>
 
-          <div className="mt-6">
+          <div className="mt-8">
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-gray-200 dark:border-gray-600" />
               </div>
               <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                <span className="px-4 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400">
                   Ou
                 </span>
               </div>
             </div>
 
-            <div className="mt-6 grid grid-cols-1">
+            <div className="mt-8 grid grid-cols-1">
               <Button
                 variant="secondary"
                 onClick={() => {
@@ -134,7 +135,7 @@ export const AuthScreen: React.FC = () => {
                   setError('');
                   setShowWakeUpMessage(false);
                 }}
-                className="dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                className="dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 h-12"
               >
                 {isLogin ? 'Créer un compte' : 'J\'ai déjà un compte'}
               </Button>

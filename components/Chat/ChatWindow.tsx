@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, MoreVertical, Phone, Video, X, Reply, Pencil } from 'lucide-react';
+import { Send, MoreVertical, Phone, Video, ArrowLeft, Reply, Pencil, X } from 'lucide-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -61,8 +61,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             setMessages(data);
             setLoading(false);
             setTimeout(scrollToBottom, 100);
-            
-            // 1. TRIGGER READ: On open conversation
             await markMessagesAsReadAPI(conversation.id);
         } catch(e) {
             console.error(e);
@@ -84,7 +82,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         
         if (!messages.find(m => m.id === newMessage.id)) {
             setTimeout(scrollToBottom, 100);
-            // 2. TRIGGER READ: On incoming new message (if sender is not me)
             if (newMessage.sender_id !== currentUser.id) {
                 markMessagesAsReadAPI(conversation.id);
             }
@@ -100,10 +97,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         });
     });
     
-    // 3. LISTENER: Update UI when someone reads messages
     const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => {
-        // Refresh messages to update read counts (Socket Event: READ_RECEIPT_UPDATE)
-        // We fetch silently without setting loading state to update ticks
         getMessagesAPI(conversation.id).then(setMessages);
     });
 
@@ -114,15 +108,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     };
   }, [conversation.id, currentUser.id]);
 
-  // --- TYPING HANDLER ---
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       setInputText(e.target.value);
-
-      // Emit typing start
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       else sendTypingEvent(conversation.id);
 
-      // Debounce stop
       typingTimeoutRef.current = setTimeout(() => {
           sendStopTypingEvent(conversation.id);
           typingTimeoutRef.current = null;
@@ -133,7 +123,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     e.preventDefault();
     if (!inputText.trim()) return;
     
-    // Clear typing immediately
     if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = null;
@@ -148,21 +137,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             setEditingMessage(null);
             setInputText('');
         } catch (err) {
-            console.error("Failed to edit", err);
             alert("Impossible de modifier le message");
         }
     } else {
         setInputText(''); 
-        // If replying, clear reply state
         const replyId = replyingTo ? replyingTo.id : undefined;
         setReplyingTo(null);
 
         try {
             await sendMessageAPI(conversation.id, currentUser.id, text, replyId);
         } catch (err) {
-            console.error("Failed to send", err);
             setInputText(text);
-            setReplyingTo(replyingTo); // Restore reply state if failed
+            setReplyingTo(replyingTo); 
             alert("Erreur d'envoi");
         }
     }
@@ -170,14 +156,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   const handleStartEdit = (msg: Message) => {
       setEditingMessage(msg);
-      setReplyingTo(null); // Cannot edit and reply same time usually
+      setReplyingTo(null);
       setInputText(msg.content);
   };
 
   const handleReply = (msg: Message) => {
       setReplyingTo(msg);
       setEditingMessage(null);
-      // Focus input
       const input = document.querySelector('input[type="text"]') as HTMLInputElement;
       if(input) input.focus();
   };
@@ -202,38 +187,45 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   return (
     <div className="flex flex-col h-full relative transition-colors duration-300">
-        {/* Header */}
-        <div className="h-16 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 shadow-sm z-10 shrink-0 transition-colors">
-            <div className="flex items-center gap-3 overflow-hidden">
-                <button onClick={onBack} className="md:hidden text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white">
-                    <X size={24} />
-                </button>
+        {/* Header - Optimized for Touch */}
+        <div className="h-16 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-2 md:px-4 shadow-sm z-10 shrink-0 transition-colors">
+            <div className="flex items-center gap-2 overflow-hidden">
+                {/* Back Button: Visible ONLY on mobile */}
+                {onBack && (
+                    <button 
+                        onClick={onBack} 
+                        className="md:hidden p-2 rounded-full text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700 active:scale-90 transition-all"
+                    >
+                        <ArrowLeft size={24} />
+                    </button>
+                )}
+                
                 <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-500 to-orange-700 text-white flex items-center justify-center font-bold shadow-sm flex-shrink-0">
                     {headerName?.charAt(0).toUpperCase() || '?'}
                 </div>
-                <div className="overflow-hidden">
-                    <h2 className="text-gray-800 dark:text-gray-100 font-semibold text-base leading-tight truncate">{headerName}</h2>
-                    <div className="flex items-center gap-1">
+                <div className="overflow-hidden flex flex-col justify-center">
+                    <h2 className="text-gray-800 dark:text-gray-100 font-bold text-base leading-tight truncate">{headerName}</h2>
+                    <div className="flex items-center gap-1 h-4">
                         {conversation.is_group ? (
                             <p className="text-xs text-gray-500 dark:text-gray-400 font-medium truncate">Groupe</p>
                         ) : (
                             <>
-                                <span className={`block w-2 h-2 rounded-full flex-shrink-0 ${isOnline ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-500'}`}></span>
+                                {isOnline && <span className="block w-2 h-2 rounded-full bg-green-500 flex-shrink-0 shadow-sm"></span>}
                                 <p className="text-xs text-gray-500 dark:text-gray-400 font-medium truncate">{isOnline ? 'En ligne' : 'Hors ligne'}</p>
                             </>
                         )}
                     </div>
                 </div>
             </div>
-            <div className="flex items-center gap-2 md:gap-4 text-orange-700 dark:text-orange-400 flex-shrink-0">
-                <Video className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2 rounded-full box-content transition-colors" size={20} />
-                <Phone className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2 rounded-full box-content transition-colors" size={20} />
-                <MoreVertical className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2 rounded-full box-content transition-colors" size={20} />
+            <div className="flex items-center gap-1 md:gap-3 text-orange-700 dark:text-orange-400 flex-shrink-0">
+                <button className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2.5 rounded-full transition-colors active:scale-95"><Video size={22} /></button>
+                <button className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2.5 rounded-full transition-colors active:scale-95"><Phone size={22} /></button>
+                <button className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2.5 rounded-full transition-colors active:scale-95"><MoreVertical size={22} /></button>
             </div>
         </div>
 
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-4 pb-4 no-scrollbar">
+        <div className="flex-1 overflow-y-auto p-3 pb-4 no-scrollbar touch-pan-y">
             {loading ? (
                 <div className="flex justify-center mt-10"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600"></div></div>
             ) : (
@@ -249,7 +241,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 ))
             )}
             
-            {/* Typing Indicator Bubble */}
             {typingCount > 0 && (
                 <div className="flex justify-start mb-3 animate-in fade-in slide-in-from-bottom-2">
                     <div className="bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 rounded-2xl rounded-tl-sm px-4 py-2 text-xs italic shadow-sm flex items-center gap-2">
@@ -266,8 +257,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area */}
-        <div className="w-full bg-white dark:bg-gray-800 px-4 py-3 border-t border-gray-100 dark:border-gray-700 shrink-0 transition-colors">
+        {/* Input Area - Mobile Safe Area */}
+        <div className="w-full bg-white dark:bg-gray-800 px-2 md:px-4 py-3 border-t border-gray-100 dark:border-gray-700 shrink-0 transition-colors safe-area-bottom">
             
             {/* Edit Indicator */}
             {editingMessage && (
@@ -276,7 +267,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         <span className="text-xs font-bold text-orange-700 dark:text-orange-400 flex items-center gap-1"><Pencil size={12}/> Modification du message</span>
                         <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{editingMessage.content}</span>
                     </div>
-                    <button onClick={handleCancelEdit} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1">
+                    <button onClick={handleCancelEdit} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-2">
                         <X size={16} />
                     </button>
                 </div>
@@ -289,7 +280,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         <span className="text-xs font-bold text-blue-700 dark:text-blue-400 flex items-center gap-1"><Reply size={12}/> Réponse à {replyingTo.sender_username}</span>
                         <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{replyingTo.content}</span>
                     </div>
-                    <button onClick={handleCancelReply} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1">
+                    <button onClick={handleCancelReply} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-2">
                         <X size={16} />
                     </button>
                 </div>
@@ -300,13 +291,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     type="text"
                     value={inputText}
                     onChange={handleInputChange}
-                    placeholder={editingMessage ? "Modifier votre message..." : (replyingTo ? "Répondre..." : "Écrivez un message...")}
-                    className={`flex-1 py-3 px-4 rounded-full border focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-gray-50 dark:bg-gray-700 dark:text-white shadow-inner transition-all ${editingMessage ? 'border-orange-300 ring-2 ring-orange-100 dark:ring-orange-900' : 'border-gray-200 dark:border-gray-600'}`}
+                    placeholder={editingMessage ? "Modifier..." : (replyingTo ? "Répondre..." : "Message")}
+                    className={`flex-1 py-3 px-5 rounded-full border focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-gray-50 dark:bg-gray-700 dark:text-white shadow-inner transition-all text-base ${editingMessage ? 'border-orange-300 ring-2 ring-orange-100 dark:ring-orange-900' : 'border-gray-200 dark:border-gray-600'}`}
+                    // Prevent zoom on iOS by ensuring font size is 16px
+                    style={{ fontSize: '16px' }}
                 />
                 <button 
                     type="submit" 
                     disabled={!inputText.trim()}
-                    className={`p-3 rounded-full text-white shadow-md flex-shrink-0 transform transition-all ${editingMessage ? 'bg-green-600 hover:bg-green-700' : 'bg-orange-600 hover:bg-orange-700'} disabled:opacity-50 disabled:hover:bg-orange-600 hover:scale-105 active:scale-95`}
+                    className={`p-3 rounded-full text-white shadow-md flex-shrink-0 transform transition-all ${editingMessage ? 'bg-green-600 hover:bg-green-700' : 'bg-orange-600 hover:bg-orange-700'} disabled:opacity-50 disabled:hover:bg-orange-600 hover:scale-105 active:scale-95 w-12 h-12 flex items-center justify-center`}
                 >
                     <Send size={20} className="ml-0.5" />
                 </button>

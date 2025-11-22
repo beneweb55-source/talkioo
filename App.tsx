@@ -20,6 +20,13 @@ import {
 import { MessageCircleCode, UserPlus, Bell, Check, X as XIcon, LogOut, X, Copy, RefreshCw, Users, Plus, Moon, Sun } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
+import { AnimatePresence, motion } from 'framer-motion';
+
+const slideVariants = {
+  initial: { x: '100%' },
+  animate: { x: 0 },
+  exit: { x: '100%' }
+};
 
 const Dashboard = () => {
   const { user, logout } = useAuth();
@@ -59,6 +66,30 @@ const Dashboard = () => {
     } else {
         document.documentElement.classList.remove('dark');
     }
+  };
+
+  // --- HISTORY MANAGEMENT ---
+  useEffect(() => {
+      const handlePopState = (event: PopStateEvent) => {
+          // If the event state is null or doesn't imply chat is open, close it
+          // This handles the "Back" button on mobile to return to the list
+          setActiveConversationId(null);
+      };
+
+      window.addEventListener('popstate', handlePopState);
+      return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const handleSelectConversation = (id: string) => {
+      setActiveConversationId(id);
+      // Push state so that "Back" button works
+      window.history.pushState({ chatOpen: true, chatId: id }, "");
+  };
+
+  const handleCloseConversation = () => {
+      // Trigger standard browser back to pop the state we pushed
+      // This will trigger the popstate listener which sets activeConversationId(null)
+      window.history.back();
   };
 
   // Fetch Data Functions
@@ -200,7 +231,7 @@ const Dashboard = () => {
           setGroupName('');
           setSelectedContacts([]);
           await fetchConversations();
-          setActiveConversationId(res.conversationId);
+          handleSelectConversation(res.conversationId);
       } catch (e) {
           alert("Erreur création groupe");
       } finally {
@@ -228,7 +259,7 @@ const Dashboard = () => {
       
       {/* Modal: Ajouter un ami */}
       {isFriendModalOpen && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+        <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200 border border-gray-100 dark:border-gray-700">
                 <button onClick={() => setIsFriendModalOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><X size={24} /></button>
                 <div className="flex items-center gap-3 mb-4">
@@ -251,7 +282,7 @@ const Dashboard = () => {
 
       {/* Modal: Créer Groupe */}
       {isGroupModalOpen && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+        <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200 h-[80vh] flex flex-col border border-gray-100 dark:border-gray-700">
                 <div className="flex justify-between items-center mb-4">
                     <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
@@ -316,8 +347,8 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Sidebar - Always Visible in this version */}
-      <div className="w-[350px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col z-10 shadow-sm flex-shrink-0">
+      {/* Sidebar - Full width on mobile, fixed width on desktop */}
+      <div className="w-full md:w-[350px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col z-10 shadow-sm flex-shrink-0 h-full">
         {/* Sidebar Header */}
         <div className="h-16 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 bg-gray-50 dark:bg-gray-900 shrink-0">
             <div className="flex items-center gap-2 overflow-hidden cursor-pointer group" onClick={copyToClipboard} title="Copier mon ID">
@@ -389,7 +420,6 @@ const Dashboard = () => {
             </div>
         </div>
 
-        {/* Tabs / Filters could go here */}
         <div className="px-4 py-2 flex gap-2">
              <button onClick={() => setIsFriendModalOpen(true)} className="flex-1 flex items-center justify-center gap-2 bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 py-2 rounded-lg text-sm font-medium hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors border border-orange-200 dark:border-orange-800 dashed">
                 <UserPlus size={16} /> Ami
@@ -408,7 +438,7 @@ const Dashboard = () => {
             <ConversationList 
                 conversations={conversations} 
                 activeId={activeConversationId} 
-                onSelect={setActiveConversationId}
+                onSelect={handleSelectConversation}
                 onDelete={handleDeleteConversation}
                 currentUser={user!}
                 onlineUsers={onlineUsers}
@@ -416,13 +446,14 @@ const Dashboard = () => {
         )}
       </div>
 
-      {/* Chat Area - Always visible alongside sidebar */}
-      <div className="flex-1 flex flex-col bg-[#e5ddd5] dark:bg-[#0b141a] relative transition-colors duration-300">
+      {/* Chat Area (Desktop) - Hidden on mobile */}
+      <div className="hidden md:flex flex-1 flex-col bg-[#e5ddd5] dark:bg-[#0b141a] relative transition-colors duration-300">
         {activeConversation ? (
             <ChatWindow 
                 conversation={activeConversation} 
                 currentUser={user!} 
                 onlineUsers={onlineUsers}
+                onBack={() => setActiveConversationId(null)}
             />
         ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-400 bg-[#f0f2f5] dark:bg-[#0b141a] pattern-bg">
@@ -434,6 +465,27 @@ const Dashboard = () => {
             </div>
         )}
       </div>
+
+      {/* Mobile Chat Overlay (Animated) */}
+      <AnimatePresence>
+        {activeConversation && (
+            <motion.div 
+                variants={slideVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                className="md:hidden fixed inset-0 z-50 bg-[#e5ddd5] dark:bg-[#0b141a] h-[100dvh] w-full flex flex-col"
+            >
+                <ChatWindow 
+                    conversation={activeConversation} 
+                    currentUser={user!} 
+                    onlineUsers={onlineUsers}
+                    onBack={handleCloseConversation}
+                />
+            </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

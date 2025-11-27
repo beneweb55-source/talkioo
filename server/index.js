@@ -5,12 +5,25 @@ const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
 
 // --- CONFIGURATION ---
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3001; // Backend Port
 const JWT_SECRET = 'super_secret_key_change_this_in_prod';
+
+// Configuration Cloudinary
+cloudinary.config({
+  cloud_name: 'dz8b5k9wp',
+  api_key: '338861446288879',
+  api_secret: 'F0OXEL6772gWT1hqzDnWCZj1wGg@dz8b5k9wp'
+});
+
+// Configuration Multer (Mémoire)
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 // Use the connection string you provided
 const connectionString = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_XPSO1Fe6aqZk@ep-misty-queen-agi42tnv-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require';
@@ -28,7 +41,10 @@ app.use(cors({
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 })); 
-app.use(express.json());
+
+// UPDATED: Increase limit to support Base64 images if needed
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // --- SOCKET.IO SETUP ---
 const io = new Server(server, {
@@ -52,7 +68,7 @@ io.on('connection', async (socket) => {
             );
             
             // Notifier le changement de statut à tous
-            io.emit('user_status', { userId: userId, isOnline: true }); 
+            io.emit('USER_STATUS_UPDATE', { userId: userId, isOnline: true }); 
             
             socket.join(`user:${userId}`);
         } catch (err) {
@@ -95,7 +111,7 @@ io.on('connection', async (socket) => {
                     [disconnectedUserId]
                 );
                 // Notifier le changement de statut à tous
-                io.emit('user_status', { userId: disconnectedUserId, isOnline: false });
+                io.emit('USER_STATUS_UPDATE', { userId: disconnectedUserId, isOnline: false });
             }
         } catch (err) {
             console.error("Erreur mise à jour déconnexion statut:", err.message);
@@ -299,17 +315,40 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
         `;
         const result = await pool.query(query, [userId]);
         
-        const enriched = result.rows.filter(row => {
+        const enriched = await Promise.all(result.rows.filter(row => {
             if (!row.last_message_time) return true;
             if (!row.last_deleted_at) return true;
             return new Date(row.last_message_time) > new Date(row.last_deleted_at);
-        }).map(row => ({
-            id: row.id,
-            name: row.name,
-            is_group: row.is_group,
-            created_at: row.created_at,
-            last_message: row.last_message_deleted ? "🚫 Message supprimé" : (row.last_message_content || "Nouvelle discussion"),
-            last_message_at: row.last_message_time || row.created_at
+        }).map(async (row) => {
+            // For private chats, ensure we return a proper name instead of null or Inconnu
+            let displayName = row.name;
+            if (!row.is_group) {
+                // Fetch the OTHER participant
+                const otherPRes = await pool.query(`
+                    SELECT u.username, u.tag 
+                    FROM participants p 
+                    JOIN users u ON p.user_id = u.id 
+                    WHERE p.conversation_id = $1 
+                    ORDER BY (p.user_id = $2) ASC -- Put current user last, so we get the other first
+                    LIMIT 1
+                `, [row.id, userId]);
+                
+                if (otherPRes.rows.length > 0) {
+                    const u = otherPRes.rows[0];
+                    displayName = `${u.username}#${u.tag}`;
+                } else {
+                    displayName = "Discussion";
+                }
+            }
+
+            return {
+                id: row.id,
+                name: displayName || "Discussion",
+                is_group: row.is_group,
+                created_at: row.created_at,
+                last_message: row.last_message_deleted ? "🚫 Message supprimé" : (row.last_message_content || "Nouvelle discussion"),
+                last_message_at: row.last_message_time || row.created_at
+            };
         }));
 
         res.json(enriched);
@@ -378,15 +417,26 @@ app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
 
 app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     try {
+        // Use json_build_object to ensure we get a proper JSON structure, safer than string concat
         const result = await pool.query(`
-            SELECT u.id, u.username, u.tag, u.email, u.is_online
+            SELECT json_build_object(
+                'id', u.id,
+                'username', u.username,
+                'tag', u.tag,
+                'email', u.email,
+                'is_online', u.is_online
+            ) as user_data
             FROM participants p 
             JOIN users u ON p.user_id = u.id 
-            WHERE p.conversation_id = $1 AND p.user_id != $2
+            WHERE p.conversation_id = $1 
+            ORDER BY (p.user_id = $2) ASC -- Prefer other user, fallback to self if self-chat
             LIMIT 1
         `, [req.params.id, req.user.id]);
-        res.json(result.rows[0]);
+        
+        const data = result.rows[0]?.user_data;
+        res.json(data || null);
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -411,7 +461,9 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
                 -- Infos du message répondu
                 m2.content AS replied_to_content,
                 u2.username AS replied_to_username,
-                u2.tag AS replied_to_tag
+                u2.tag AS replied_to_tag,
+                m2.message_type AS replied_to_type,
+                m2.attachment_url AS replied_to_attachment_url
             FROM messages m
             LEFT JOIN users u ON m.sender_id = u.id
             LEFT JOIN messages m2 ON m.replied_to_message_id = m2.id
@@ -427,7 +479,9 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
             reply: m.replied_to_message_id ? {
                 id: m.replied_to_message_id,
                 content: m.replied_to_content || 'Message original supprimé', 
-                sender: m.replied_to_username ? `${m.replied_to_username}#${m.replied_to_tag}` : 'Utilisateur inconnu'
+                sender: m.replied_to_username ? `${m.replied_to_username}#${m.replied_to_tag}` : 'Utilisateur inconnu',
+                message_type: m.replied_to_type,
+                attachment_url: m.replied_to_attachment_url
             } : null
         }));
         res.json(messages);
@@ -436,15 +490,64 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
     }
 });
 
-app.post('/api/messages', authenticateToken, async (req, res) => {
-    const { conversation_id, content, replied_to_message_id } = req.body;
-    const senderId = req.user.id; 
+// MODIFIED: Support Image Upload via Multer & Cloudinary
+app.post('/api/messages', authenticateToken, upload.single('media'), async (req, res) => {
+    // 1. Récupération des variables du corps de la requête
+    const conversation_id = req.body.conversation_id;
+    const content = req.body.content; // Peut être undefined, null, ou une chaîne (incluant "")
+    const replied_to_message_id = req.body.replied_to_message_id;
+    const senderId = req.user.id;
+    
+    let finalContent = content;
+    let attachmentUrl = null;
+    let messageType = 'text';
+
+    // Image Upload Logic
+    if (req.file) {
+        console.log("Fichier reçu :", req.file.originalname, req.file.mimetype);
+        try {
+            // Convert buffer to base64 for Cloudinary
+            const b64 = Buffer.from(req.file.buffer).toString('base64');
+            let dataURI = "data:" + req.file.mimetype + ";base64," + b64;
+            
+            const uploadResult = await cloudinary.uploader.upload(dataURI, {
+                folder: `chat-app/conversations/${conversation_id}`,
+                resource_type: "auto"
+            });
+            
+            attachmentUrl = uploadResult.secure_url;
+            messageType = 'image';
+            console.log("URL Cloudinary obtenue:", attachmentUrl);
+
+            // CORRECTION: Ensure content is strictly an empty string if missing when attachment is present
+            if (!finalContent) {
+                finalContent = '';
+            }
+
+        } catch (error) {
+            console.error('ERREUR GRAVE Cloudinary:', error);
+            return res.status(500).json({ error: 'Échec du téléchargement de l\'image.' });
+        }
+    }
+
+    // Validation: Cannot send message that is empty AND has no attachment
+    // trim() only works on strings, so we check if finalContent is falsy or empty string
+    if (!attachmentUrl && (!finalContent || finalContent.trim() === '')) {
+         return res.status(400).json({ error: 'Message vide non autorisé.' });
+    }
+
+    // Safety fallback: if finalContent is still null/undefined for some reason (text-only case but missing param)
+    if (finalContent === undefined || finalContent === null) {
+        finalContent = '';
+    }
+
     try {
         const result = await pool.query(
-            'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id) VALUES ($1, $2, $3, $4) RETURNING *',
-            [conversation_id, senderId, content, replied_to_message_id || null] 
+            'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id, message_type, attachment_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+            [conversation_id, senderId, finalContent, replied_to_message_id || null, messageType, attachmentUrl] 
         );
         const msg = result.rows[0];
+        console.log("Message inséré et broadcasté:", msg);
 
         // 1. Marquer le message comme lu par l'expéditeur (soi-même)
         await pool.query(
@@ -497,6 +600,7 @@ app.post('/api/messages', authenticateToken, async (req, res) => {
         
         res.json(fullMsg);
     } catch (err) {
+        console.error("SQL Error:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -551,9 +655,14 @@ app.put('/api/messages/:id', authenticateToken, async (req, res) => {
 app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(
-            'UPDATE messages SET deleted_at = NOW() WHERE id = $1 RETURNING *',
-            [req.params.id]
+            'UPDATE messages SET deleted_at = NOW() WHERE id = $1 AND sender_id = $2 RETURNING *',
+            [req.params.id, req.user.id]
         );
+        
+        if (result.rows.length === 0) {
+             return res.status(403).json({ error: "Vous ne pouvez supprimer que vos propres messages." });
+        }
+        
         const msg = result.rows[0];
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [msg.sender_id]);
         const sender = userRes.rows[0];

@@ -64,15 +64,26 @@ const Dashboard = () => {
     const init = async () => {
         setLoading(true);
         await Promise.all([fetchConversations(), fetchRequests()]);
-        setOnlineUsers(new Set(await getOnlineUsersAPI()));
+        const onlineIds = await getOnlineUsersAPI();
+        setOnlineUsers(new Set(onlineIds));
         setLoading(false);
     };
     init();
 
     const unsubReq = subscribeToFriendRequests(user.id, fetchRequests);
     const unsubConv = subscribeToConversationsList(fetchConversations);
+    
+    // Status update logic
     const unsubStatus = subscribeToUserStatus((uid, online) => {
-        setOnlineUsers(prev => { const n = new Set(prev); online ? n.add(uid) : n.delete(uid); return n; });
+        setOnlineUsers(prev => { 
+            const n = new Set(prev); 
+            if (online) {
+                n.add(uid);
+            } else {
+                n.delete(uid); 
+            }
+            return n; 
+        });
     });
 
     return () => { unsubReq(); unsubConv(); unsubStatus(); };
@@ -176,7 +187,12 @@ const Dashboard = () => {
                     </button>
                     <AnimatePresence>
                     {showNotifications && (
-                        <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute left-0 mt-3 w-72 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-800 z-50 overflow-hidden">
+                        <motion.div 
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }} 
+                            animate={{ opacity: 1, y: 0, scale: 1 }} 
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }} 
+                            className="absolute right-0 mt-3 w-72 max-w-[90vw] bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-800 z-50 overflow-hidden origin-top-right"
+                        >
                             <div className="p-3 bg-gray-50 dark:bg-gray-800 border-b dark:border-gray-700 flex justify-between items-center">
                                 <span className="text-xs font-bold uppercase text-gray-500">Notifications</span>
                                 <button onClick={fetchRequests}><RefreshCw size={14} className="text-gray-400" /></button>

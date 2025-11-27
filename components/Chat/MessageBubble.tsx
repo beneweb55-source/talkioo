@@ -12,6 +12,17 @@ interface MessageBubbleProps {
 }
 
 const renderContent = (text: string) => {
+    if (!text) return null;
+    
+    // Legacy Check if it's a Base64 Image (Fallback)
+    if (text.startsWith('data:image')) {
+        return (
+            <div className="my-1">
+                <img src={text} alt="envoyé" className="rounded-lg max-w-full max-h-[300px] object-cover border border-black/10 dark:border-white/10" />
+            </div>
+        );
+    }
+
     const parts = text.split(/((?:https?:\/\/|www\.)[^\s]+)/g);
     return parts.map((part, i) => {
         if (part.match(/^(https?:\/\/|www\.)/)) {
@@ -47,6 +58,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       setTranslateX(0); setTouchStart(null);
   };
 
+  const isBase64Image = message.content.startsWith('data:image');
+  const hasAttachment = !!message.attachment_url;
+  const isImage = isBase64Image || hasAttachment;
+
   return (
     <motion.div 
         layout
@@ -75,9 +90,15 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         )}
 
         {/* Action Menu */}
-        {isOwn && !isDeleted && (
+        {isOwn && !isDeleted && !isImage && (
             <div className="opacity-0 group-hover:opacity-100 transition-all flex flex-col gap-1 mb-2 absolute top-0 -left-8">
                 {onEdit && <button onClick={() => onEdit(message)} className="p-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-white text-gray-500 rounded-full shadow-sm"><Pencil size={10} /></button>}
+                {onDelete && <button onClick={() => onDelete(message)} className="p-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-white text-red-500 rounded-full shadow-sm"><Trash2 size={10} /></button>}
+            </div>
+        )}
+        
+        {isOwn && !isDeleted && isImage && (
+             <div className="opacity-0 group-hover:opacity-100 transition-all flex flex-col gap-1 mb-2 absolute top-0 -left-8">
                 {onDelete && <button onClick={() => onDelete(message)} className="p-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-white text-red-500 rounded-full shadow-sm"><Trash2 size={10} /></button>}
             </div>
         )}
@@ -91,7 +112,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
           {message.reply && !isDeleted && (
               <div className={`mb-2 rounded-lg p-2 text-xs border-l-2 bg-black/10 dark:bg-white/5 ${isOwn ? 'border-white/50 text-white/90' : 'border-brand-500 text-gray-600 dark:text-gray-300'}`}>
                   <div className="font-bold opacity-90 mb-0.5">{message.reply.sender}</div>
-                  <div className="truncate opacity-80">{message.reply.content}</div>
+                  <div className="truncate opacity-80">{message.reply.content.startsWith('data:image') || message.reply.attachment_url ? '📷 Photo' : message.reply.content}</div>
               </div>
           )}
 
@@ -102,7 +123,26 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
           )}
           
           <div className="text-[15px] leading-relaxed break-words whitespace-pre-wrap">
-              {isDeleted ? <span className="flex items-center gap-1.5 text-sm opacity-80"><Trash2 size={12}/> Message supprimé</span> : renderContent(message.content)}
+              {isDeleted ? (
+                  <span className="flex items-center gap-1.5 text-sm opacity-80"><Trash2 size={12}/> Message supprimé</span>
+              ) : (
+                  <>
+                      {/* Render Attachment Image if present */}
+                      {message.attachment_url && (
+                          <div className="my-1 mb-2">
+                             <img 
+                                src={message.attachment_url} 
+                                alt="Image envoyée" 
+                                className="rounded-lg max-w-full max-h-[300px] object-cover border border-black/10 dark:border-white/10 cursor-pointer"
+                                onClick={() => window.open(message.attachment_url, '_blank')}
+                             />
+                          </div>
+                      )}
+                      
+                      {/* Render Text Content if present */}
+                      {renderContent(message.content)}
+                  </>
+              )}
           </div>
           
           <div className={`flex items-center justify-end gap-1 mt-1 ${isOwn ? 'text-brand-100' : 'text-gray-400'}`}>

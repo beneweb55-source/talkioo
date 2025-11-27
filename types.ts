@@ -32,10 +32,14 @@ export interface Message {
   deleted_at?: string; // New: For soft delete (delete for everyone)
   sender_username?: string;
   read_count?: number;
+  message_type?: 'text' | 'image' | 'video' | 'audio';
+  attachment_url?: string;
   reply?: {
     id: string;
     content: string;
     sender: string;
+    message_type?: string;
+    attachment_url?: string;
   } | null;
 }
 

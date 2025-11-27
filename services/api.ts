@@ -45,10 +45,15 @@ export const disconnectSocket = () => {
 // --- API HELPER ---
 const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
     const token = localStorage.getItem('talkio_auth_token');
-    const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    };
+    
+    // DO NOT set Content-Type if it is FormData (browser handles it)
+    const headers: HeadersInit = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    
+    // Only set JSON content type if it's not FormData
+    if (!(options.body instanceof FormData)) {
+        headers['Content-Type'] = 'application/json';
+    }
 
     try {
         const response = await fetch(`${API_URL}${endpoint}`, {
@@ -127,15 +132,39 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
     return await fetchWithAuth(`/conversations/${conversationId}/messages`);
 };
 
-export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string): Promise<Message> => {
-    return await fetchWithAuth('/messages', { 
-        method: 'POST', 
-        body: JSON.stringify({ 
-            conversation_id: conversationId, 
-            content,
-            replied_to_message_id: repliedToId 
-        }) 
-    });
+export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image' = 'text', file?: File): Promise<Message> => {
+    
+    // UPDATED: Use FormData if a file is present to support Multer/Cloudinary
+    if (file) {
+        if (file.size > 10 * 1024 * 1024) throw new Error("Image trop volumineuse (Max 10Mo)");
+        
+        const formData = new FormData();
+        formData.append('conversation_id', conversationId);
+        
+        // CRITICAL FIX: Ensure 'content' is strictly a string, even if empty.
+        // This prevents the backend receiving 'undefined'/'null' and violating SQL NOT NULL constraint.
+        const safeContent = (content === null || content === undefined) ? "" : String(content);
+        formData.append('content', safeContent);
+        
+        if (repliedToId) formData.append('replied_to_message_id', repliedToId);
+        formData.append('media', file); // 'media' field for Multer
+        
+        return await fetchWithAuth('/messages', { 
+            method: 'POST', 
+            body: formData 
+        });
+    } else {
+        // Legacy JSON path for text-only
+        return await fetchWithAuth('/messages', { 
+            method: 'POST', 
+            body: JSON.stringify({ 
+                conversation_id: conversationId, 
+                content, // JSON stringify handles empty strings correctly
+                replied_to_message_id: repliedToId,
+                message_type: 'text'
+            }) 
+        });
+    }
 };
 
 export const editMessageAPI = async (messageId: string, newContent: string): Promise<Message> => {
@@ -237,8 +266,9 @@ export const subscribeToUserStatus = (onStatusChange: (userId: string, isOnline:
     const handler = (data: { userId: string, isOnline: boolean }) => {
         onStatusChange(data.userId, data.isOnline);
     };
-    socket.on('user_status', handler);
-    return () => socket.off('user_status', handler);
+    // UPDATED: Listen to the correct event name sent by the backend
+    socket.on('USER_STATUS_UPDATE', handler);
+    return () => socket.off('USER_STATUS_UPDATE', handler);
 };
 
 export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {

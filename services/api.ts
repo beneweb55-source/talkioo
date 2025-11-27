@@ -1,21 +1,15 @@
 import { io, Socket } from 'socket.io-client';
-import { User, Conversation, Message, AuthResponse, FriendRequest, GroupMember } from '../types';
+import { User, Conversation, Message, AuthResponse, FriendRequest } from '../types';
 
 // --- CONFIGURATION ---
-// Détection dynamique de l'environnement
-const hostname = window.location.hostname;
-const isLocal = hostname === 'localhost' || 
-                hostname === '127.0.0.1' || 
-                hostname.startsWith('192.168.') || 
-                hostname.startsWith('10.') || 
-                hostname.endsWith('.local');
+// Detect if we are running locally to switch between Localhost and Render
+const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-// Remove trailing slash from API_BASE to be safe
-const API_BASE = isLocal ? `http://${hostname}:3001` : 'https://talkioo.onrender.com';
-// API_URL should be base + /api without trailing slash
+// If local, use port 3001 (standard node server), else use production URL
+const API_BASE = isLocal ? 'http://localhost:3001' : 'https://talkioo.onrender.com';
 const API_URL = `${API_BASE}/api`;
 
-console.log(`[Talkio] Environment: ${isLocal ? 'Local' : 'Production'} (${hostname})`);
+console.log(`[Talkio] Environment: ${isLocal ? 'Local' : 'Production'}`);
 console.log(`[Talkio] Connecting to Backend: ${API_BASE}`);
 
 // --- SOCKET INSTANCE ---
@@ -24,6 +18,8 @@ let socket: Socket;
 export const connectSocket = (token: string, userId: string) => {
     if (socket && socket.connected) return;
     
+    // IMPORTANT: Sending userId in query is crucial for the backend to link socketID <-> UserID
+    // for online status updates.
     socket = io(API_BASE, {
         auth: { token },
         query: { userId }, 
@@ -54,58 +50,44 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
         ...(token ? { 'Authorization': `Bearer ${token}` } : {})
     };
 
-    // Ensure endpoint has leading slash
-    const safeEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-    const fullUrl = `${API_URL}${safeEndpoint}`;
-
     try {
-        console.log(`Fetching: ${options.method || 'GET'} ${fullUrl}`);
-        
-        const response = await fetch(fullUrl, {
+        const response = await fetch(`${API_URL}${endpoint}`, {
             ...options,
             headers: { ...headers, ...options.headers }
         });
         
+        // Check content type to avoid crashing on HTML 404s
         const contentType = response.headers.get("content-type");
         let data;
         if (contentType && contentType.indexOf("application/json") !== -1) {
             data = await response.json();
         } else {
-            // Try to get text to see real error (e.g. "Unauthorized" or "Cannot POST /...")
+            // If not JSON (likely HTML error page), throw generic error or text
             const text = await response.text();
-            console.error(`[API Error HTML]:`, text);
-            throw new Error(`Erreur serveur (${response.status}) sur ${safeEndpoint}: ${text.slice(0, 100) || 'Réponse non-JSON reçue'}`);
+            throw new Error(`Erreur serveur (${response.status}): Endpoint introuvable ou erreur interne.`);
         }
         
         if (!response.ok) {
-            throw new Error(data.error || `Erreur API (${response.status})`);
+            throw new Error(data.error || 'Erreur API');
         }
         
         return data;
     } catch (error: any) {
         if (error.message === 'Failed to fetch') {
-            throw new Error(`Impossible de joindre le serveur ${API_BASE}. Vérifiez qu'il est lancé.`);
+            throw new Error("Impossible de joindre le serveur. Il démarre peut-être ? (Attendez 30s)");
         }
         console.error(`API Error (${endpoint}):`, error.message);
         throw error;
     }
 };
 
-// --- AUTH & PROFILE ---
+// --- AUTH ---
 export const registerAPI = async (username: string, email: string, password: string): Promise<AuthResponse> => {
     return await fetchWithAuth('/auth/register', { method: 'POST', body: JSON.stringify({ username, email, password }) });
 };
 
 export const loginAPI = async (email: string, password: string): Promise<AuthResponse> => {
     return await fetchWithAuth('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-};
-
-export const updateProfileAPI = async (username: string, email: string): Promise<User> => {
-    return await fetchWithAuth('/users/profile', { method: 'PUT', body: JSON.stringify({ username, email }) });
-};
-
-export const updatePasswordAPI = async (currentPassword: string, newPassword: string): Promise<void> => {
-    await fetchWithAuth('/users/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) });
 };
 
 export const getUserByIdAPI = async (id: string): Promise<User | undefined> => {
@@ -116,7 +98,7 @@ export const getOnlineUsersAPI = async (): Promise<string[]> => {
     try { return await fetchWithAuth('/users/online'); } catch (e) { return []; }
 };
 
-// --- CONVERSATIONS & GROUPS ---
+// --- CONVERSATIONS ---
 export const getConversationsAPI = async (userId: string): Promise<Conversation[]> => {
     return await fetchWithAuth('/conversations');
 };
@@ -139,27 +121,6 @@ export const getOtherParticipant = async (conversationId: string, currentUserId:
 export const getContactsAPI = async (): Promise<User[]> => {
     return await fetchWithAuth('/contacts');
 };
-
-export const getGroupMembersAPI = async (conversationId: string): Promise<GroupMember[]> => {
-    return await fetchWithAuth(`/conversations/${conversationId}/members`);
-};
-
-export const addGroupMemberAPI = async (conversationId: string, userId: string): Promise<void> => {
-    await fetchWithAuth(`/conversations/${conversationId}/members`, { method: 'POST', body: JSON.stringify({ userId }) });
-};
-
-export const removeGroupMemberAPI = async (conversationId: string, userId: string): Promise<void> => {
-    await fetchWithAuth(`/conversations/${conversationId}/members/${userId}`, { method: 'DELETE' });
-};
-
-export const updateGroupMemberRoleAPI = async (conversationId: string, userId: string, role: string): Promise<void> => {
-    await fetchWithAuth(`/conversations/${conversationId}/members/${userId}`, { method: 'PUT', body: JSON.stringify({ role }) });
-};
-
-export const updateGroupInfoAPI = async (conversationId: string, name: string): Promise<void> => {
-    await fetchWithAuth(`/conversations/${conversationId}`, { method: 'PUT', body: JSON.stringify({ name }) });
-};
-
 
 // --- MESSAGES ---
 export const getMessagesAPI = async (conversationId: string): Promise<Message[]> => {
@@ -276,8 +237,8 @@ export const subscribeToUserStatus = (onStatusChange: (userId: string, isOnline:
     const handler = (data: { userId: string, isOnline: boolean }) => {
         onStatusChange(data.userId, data.isOnline);
     };
-    socket.on('USER_STATUS_UPDATE', handler);
-    return () => socket.off('USER_STATUS_UPDATE', handler);
+    socket.on('user_status', handler);
+    return () => socket.off('user_status', handler);
 };
 
 export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {
@@ -299,12 +260,10 @@ export const subscribeToConversationsList = (onUpdate: () => void) => {
     socket.on('conversation_added', handler);
     socket.on('conversation_updated', handler);
     socket.on('request_accepted', handler); 
-    socket.on('group_updated', handler);
     
     return () => {
         socket.off('conversation_added', handler);
         socket.off('conversation_updated', handler);
         socket.off('request_accepted', handler);
-        socket.off('group_updated', handler);
     };
 };

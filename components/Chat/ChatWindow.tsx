@@ -2,7 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, MoreVertical, Phone, Video, ArrowLeft, Reply, Pencil, X } from 'lucide-react';
+import { Send, MoreVertical, Phone, Video, X, Reply, Pencil, ArrowLeft } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -20,18 +21,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
-  
-  // Typing Logic
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const typingTimeoutRef = useRef<any>(null);
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
 
-  // Load Name & Participant Info
   useEffect(() => {
       const loadName = async () => {
         if (conversation.is_group) {
@@ -50,7 +45,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       loadName();
   }, [conversation, currentUser]);
 
-  // Load history + Subscribe Realtime
   useEffect(() => {
     setLoading(true);
     setTypingUsers(new Set());
@@ -62,57 +56,39 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             setLoading(false);
             setTimeout(scrollToBottom, 100);
             await markMessagesAsReadAPI(conversation.id);
-        } catch(e) {
-            console.error(e);
-            setLoading(false);
-        }
+        } catch(e) { console.error(e); setLoading(false); }
     };
     fetchAndMark();
 
     const unsubscribeMsgs = subscribeToMessages(conversation.id, (newMessage) => {
         setMessages(prev => {
-            const existingIndex = prev.findIndex(m => m.id === newMessage.id);
-            if (existingIndex !== -1) {
-                const updated = [...prev];
-                updated[existingIndex] = newMessage;
-                return updated;
-            }
+            const exists = prev.find(m => m.id === newMessage.id);
+            if (exists) return prev.map(m => m.id === newMessage.id ? newMessage : m);
             return [...prev, newMessage];
         });
-        
         if (!messages.find(m => m.id === newMessage.id)) {
             setTimeout(scrollToBottom, 100);
-            if (newMessage.sender_id !== currentUser.id) {
-                markMessagesAsReadAPI(conversation.id);
-            }
+            if (newMessage.sender_id !== currentUser.id) markMessagesAsReadAPI(conversation.id);
         }
     });
 
     const unsubscribeTyping = subscribeToTypingEvents(conversation.id, (userId, isTyping) => {
         setTypingUsers(prev => {
             const next = new Set(prev);
-            if (isTyping) next.add(userId);
-            else next.delete(userId);
+            if (isTyping) next.add(userId); else next.delete(userId);
             return next;
         });
     });
     
-    const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => {
-        getMessagesAPI(conversation.id).then(setMessages);
-    });
+    const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => getMessagesAPI(conversation.id).then(setMessages));
 
-    return () => {
-        unsubscribeMsgs();
-        unsubscribeTyping();
-        unsubscribeReads();
-    };
+    return () => { unsubscribeMsgs(); unsubscribeTyping(); unsubscribeReads(); };
   }, [conversation.id, currentUser.id]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       setInputText(e.target.value);
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       else sendTypingEvent(conversation.id);
-
       typingTimeoutRef.current = setTimeout(() => {
           sendStopTypingEvent(conversation.id);
           typingTimeoutRef.current = null;
@@ -130,180 +106,125 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     }
 
     const text = inputText;
-    
     if (editingMessage) {
-        try {
-            await editMessageAPI(editingMessage.id, text);
-            setEditingMessage(null);
-            setInputText('');
-        } catch (err) {
-            alert("Impossible de modifier le message");
-        }
+        try { await editMessageAPI(editingMessage.id, text); setEditingMessage(null); setInputText(''); } 
+        catch (err) { alert("Erreur modification"); }
     } else {
-        setInputText(''); 
-        const replyId = replyingTo ? replyingTo.id : undefined;
-        setReplyingTo(null);
-
-        try {
-            await sendMessageAPI(conversation.id, currentUser.id, text, replyId);
-        } catch (err) {
-            setInputText(text);
-            setReplyingTo(replyingTo); 
-            alert("Erreur d'envoi");
-        }
+        setInputText(''); setReplyingTo(null);
+        try { await sendMessageAPI(conversation.id, currentUser.id, text, replyingTo?.id); } 
+        catch (err) { setInputText(text); alert("Erreur envoi"); }
     }
   };
 
-  const handleStartEdit = (msg: Message) => {
-      setEditingMessage(msg);
-      setReplyingTo(null);
-      setInputText(msg.content);
-  };
-
-  const handleReply = (msg: Message) => {
-      setReplyingTo(msg);
-      setEditingMessage(null);
-      const input = document.querySelector('input[type="text"]') as HTMLInputElement;
-      if(input) input.focus();
-  };
-
-  const handleCancelEdit = () => {
-      setEditingMessage(null);
-      setInputText('');
-  };
-
-  const handleCancelReply = () => {
-      setReplyingTo(null);
-  };
-
-  const handleDelete = async (msg: Message) => {
-      if(window.confirm("Supprimer ce message pour tout le monde ?")) {
-          try { await deleteMessageAPI(msg.id); } catch (e) { alert("Erreur suppression"); }
-      }
-  };
-
   const isOnline = otherUserId && onlineUsers.has(otherUserId);
-  const typingCount = typingUsers.size;
 
   return (
-    <div className="flex flex-col h-full relative transition-colors duration-300">
-        {/* Header - Optimized for Touch */}
-        <div className="h-16 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-2 md:px-4 shadow-sm z-10 shrink-0 transition-colors">
-            <div className="flex items-center gap-2 overflow-hidden">
-                {/* Back Button: Visible ONLY on mobile */}
-                {onBack && (
-                    <button 
-                        onClick={onBack} 
-                        className="md:hidden p-2 rounded-full text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700 active:scale-90 transition-all"
-                    >
-                        <ArrowLeft size={24} />
-                    </button>
-                )}
-                
-                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-500 to-orange-700 text-white flex items-center justify-center font-bold shadow-sm flex-shrink-0">
-                    {headerName?.charAt(0).toUpperCase() || '?'}
-                </div>
-                <div className="overflow-hidden flex flex-col justify-center">
-                    <h2 className="text-gray-800 dark:text-gray-100 font-bold text-base leading-tight truncate">{headerName}</h2>
-                    <div className="flex items-center gap-1 h-4">
-                        {conversation.is_group ? (
-                            <p className="text-xs text-gray-500 dark:text-gray-400 font-medium truncate">Groupe</p>
-                        ) : (
-                            <>
-                                {isOnline && <span className="block w-2 h-2 rounded-full bg-green-500 flex-shrink-0 shadow-sm"></span>}
-                                <p className="text-xs text-gray-500 dark:text-gray-400 font-medium truncate">{isOnline ? 'En ligne' : 'Hors ligne'}</p>
-                            </>
-                        )}
+    <div className="flex flex-col h-full relative bg-[#e5ddd5] dark:bg-[#0b141a]">
+        {/* Wallpaper Pattern */}
+        <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" 
+             style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')" }}></div>
+
+        {/* Header - Glassmorphism */}
+        <div className="h-[70px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-gray-800/50 flex items-center justify-between px-4 z-20 shadow-sm">
+            <div className="flex items-center gap-3">
+                <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10">
+                    <ArrowLeft size={22} />
+                </button>
+                <div className="relative">
+                    <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md">
+                        {headerName?.charAt(0).toUpperCase()}
                     </div>
+                    {isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
+                </div>
+                <div>
+                    <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight">{headerName}</h2>
+                    <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">
+                        {conversation.is_group ? 'Groupe' : (isOnline ? 'En ligne' : 'Hors ligne')}
+                    </p>
                 </div>
             </div>
-            <div className="flex items-center gap-1 md:gap-3 text-orange-700 dark:text-orange-400 flex-shrink-0">
-                <button className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2.5 rounded-full transition-colors active:scale-95"><Video size={22} /></button>
-                <button className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2.5 rounded-full transition-colors active:scale-95"><Phone size={22} /></button>
-                <button className="cursor-pointer hover:bg-orange-50 dark:hover:bg-gray-700 p-2.5 rounded-full transition-colors active:scale-95"><MoreVertical size={22} /></button>
+            <div className="flex gap-3 text-brand-600 dark:text-brand-400">
+                <Video className="w-5 h-5 cursor-pointer hover:opacity-70" />
+                <Phone className="w-5 h-5 cursor-pointer hover:opacity-70" />
             </div>
         </div>
 
-        {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-3 pb-4 no-scrollbar touch-pan-y">
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-2 z-10 no-scrollbar">
             {loading ? (
-                <div className="flex justify-center mt-10"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600"></div></div>
+                <div className="flex justify-center mt-10"><div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></div></div>
             ) : (
                 messages.map(msg => (
                     <MessageBubble 
                         key={msg.id} 
                         message={msg} 
                         isOwn={msg.sender_id === currentUser.id}
-                        onEdit={handleStartEdit}
-                        onDelete={handleDelete}
-                        onReply={handleReply}
+                        onEdit={(m) => { setEditingMessage(m); setInputText(m.content); setReplyingTo(null); }}
+                        onDelete={async (m) => { if(window.confirm('Supprimer ?')) await deleteMessageAPI(m.id); }}
+                        onReply={(m) => { setReplyingTo(m); setEditingMessage(null); document.querySelector('input')?.focus(); }}
                     />
                 ))
             )}
             
-            {typingCount > 0 && (
-                <div className="flex justify-start mb-3 animate-in fade-in slide-in-from-bottom-2">
-                    <div className="bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 rounded-2xl rounded-tl-sm px-4 py-2 text-xs italic shadow-sm flex items-center gap-2">
-                        <div className="flex gap-1">
-                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
-                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
-                            <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
-                        </div>
-                        <span>train d'écrire...</span>
+            <AnimatePresence>
+            {typingUsers.size > 0 && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex justify-start">
+                    <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-2xl rounded-tl-sm shadow-sm flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce"></span>
+                        <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce delay-100"></span>
+                        <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce delay-200"></span>
                     </div>
-                </div>
+                </motion.div>
             )}
-            
+            </AnimatePresence>
             <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area - Mobile Safe Area */}
-        <div className="w-full bg-white dark:bg-gray-800 px-2 md:px-4 py-3 border-t border-gray-100 dark:border-gray-700 shrink-0 transition-colors safe-area-bottom">
-            
-            {/* Edit Indicator */}
-            {editingMessage && (
-                <div className="flex items-center justify-between bg-orange-50 dark:bg-orange-900/20 px-4 py-2 rounded-t-lg border-l-4 border-orange-500 mb-2">
-                    <div className="flex flex-col overflow-hidden">
-                        <span className="text-xs font-bold text-orange-700 dark:text-orange-400 flex items-center gap-1"><Pencil size={12}/> Modification du message</span>
-                        <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{editingMessage.content}</span>
-                    </div>
-                    <button onClick={handleCancelEdit} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-2">
-                        <X size={16} />
-                    </button>
-                </div>
-            )}
+        {/* Input Area */}
+        <div className="p-3 z-20 bg-transparent">
+            <div className="bg-white dark:bg-gray-900 rounded-[24px] shadow-lg border border-gray-100 dark:border-gray-800 p-2 relative">
+                
+                {/* Context Header (Reply/Edit) */}
+                <AnimatePresence>
+                    {(editingMessage || replyingTo) && (
+                        <motion.div 
+                            initial={{ height: 0, opacity: 0 }} 
+                            animate={{ height: 'auto', opacity: 1 }} 
+                            exit={{ height: 0, opacity: 0 }}
+                            className="px-4 py-2 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50 rounded-t-xl mb-1"
+                        >
+                            <div className="text-xs">
+                                <span className={`font-bold flex items-center gap-1 ${editingMessage ? 'text-brand-600' : 'text-blue-500'}`}>
+                                    {editingMessage ? <><Pencil size={10}/> Modification</> : <><Reply size={10}/> Réponse à {replyingTo?.sender_username}</>}
+                                </span>
+                                <div className="text-gray-500 truncate max-w-[200px]">{editingMessage?.content || replyingTo?.content}</div>
+                            </div>
+                            <button onClick={() => { setEditingMessage(null); setReplyingTo(null); setInputText(''); }} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
+                                <X size={14} className="text-gray-500" />
+                            </button>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
-            {/* Reply Indicator */}
-            {replyingTo && (
-                <div className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 px-4 py-2 rounded-t-lg border-l-4 border-blue-500 mb-2 animate-in slide-in-from-bottom-2">
-                    <div className="flex flex-col overflow-hidden">
-                        <span className="text-xs font-bold text-blue-700 dark:text-blue-400 flex items-center gap-1"><Reply size={12}/> Réponse à {replyingTo.sender_username}</span>
-                        <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{replyingTo.content}</span>
-                    </div>
-                    <button onClick={handleCancelReply} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-2">
-                        <X size={16} />
-                    </button>
-                </div>
-            )}
-
-            <form onSubmit={handleSendMessage} className="flex items-center gap-2">
-                <input
-                    type="text"
-                    value={inputText}
-                    onChange={handleInputChange}
-                    placeholder={editingMessage ? "Modifier..." : (replyingTo ? "Répondre..." : "Message")}
-                    className={`flex-1 py-3 px-5 rounded-full border focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-gray-50 dark:bg-gray-700 dark:text-white shadow-inner transition-all text-base ${editingMessage ? 'border-orange-300 ring-2 ring-orange-100 dark:ring-orange-900' : 'border-gray-200 dark:border-gray-600'}`}
-                    // Prevent zoom on iOS by ensuring font size is 16px
-                    style={{ fontSize: '16px' }}
-                />
-                <button 
-                    type="submit" 
-                    disabled={!inputText.trim()}
-                    className={`p-3 rounded-full text-white shadow-md flex-shrink-0 transform transition-all ${editingMessage ? 'bg-green-600 hover:bg-green-700' : 'bg-orange-600 hover:bg-orange-700'} disabled:opacity-50 disabled:hover:bg-orange-600 hover:scale-105 active:scale-95 w-12 h-12 flex items-center justify-center`}
-                >
-                    <Send size={20} className="ml-0.5" />
-                </button>
-            </form>
+                <form onSubmit={handleSendMessage} className="flex items-center gap-2 pl-2">
+                    <input
+                        type="text"
+                        value={inputText}
+                        onChange={handleInputChange}
+                        placeholder="Écrivez votre message..."
+                        className="flex-1 bg-transparent border-none outline-none text-gray-800 dark:text-white px-2 py-3 placeholder-gray-400"
+                    />
+                    <motion.button 
+                        whileHover={{ scale: 1.1 }}
+                        whileTap={{ scale: 0.9 }}
+                        disabled={!inputText.trim()}
+                        type="submit" 
+                        className="w-10 h-10 bg-brand-500 hover:bg-brand-600 disabled:bg-gray-300 dark:disabled:bg-gray-700 rounded-full flex items-center justify-center text-white shadow-md transition-colors"
+                    >
+                        <Send size={18} className="ml-0.5" />
+                    </motion.button>
+                </form>
+            </div>
         </div>
     </div>
   );

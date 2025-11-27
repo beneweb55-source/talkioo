@@ -1,6 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { Message } from '../../types';
 import { Check, CheckCheck, Pencil, Trash2, Reply } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 interface MessageBubbleProps {
   message: Message;
@@ -10,24 +11,14 @@ interface MessageBubbleProps {
   onReply?: (msg: Message) => void;
 }
 
-// Helper to linkify URLs
 const renderContent = (text: string) => {
     const parts = text.split(/((?:https?:\/\/|www\.)[^\s]+)/g);
     return parts.map((part, i) => {
         if (part.match(/^(https?:\/\/|www\.)/)) {
             let href = part;
-            if (!href.startsWith('http')) {
-                href = 'http://' + href;
-            }
+            if (!href.startsWith('http')) href = 'http://' + href;
             return (
-                <a 
-                    key={i} 
-                    href={href} 
-                    target="_blank" 
-                    rel="noopener noreferrer" 
-                    className="text-blue-500 underline hover:text-blue-600 break-all"
-                    onClick={(e) => e.stopPropagation()}
-                >
+                <a key={i} href={href} target="_blank" rel="noopener noreferrer" className="underline opacity-90 hover:opacity-100 break-all" onClick={(e) => e.stopPropagation()}>
                     {part}
                 </a>
             );
@@ -39,190 +30,94 @@ const renderContent = (text: string) => {
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, onEdit, onDelete, onReply }) => {
   const isDeleted = !!message.deleted_at;
   const isEdited = !!message.updated_at && !isDeleted;
-  
   const readCount = message.read_count || 0;
   const isReadByOthers = readCount > 0;
 
-  // --- SWIPE LOGIC ---
-  const [swipeOffset, setSwipeOffset] = useState(0);
-  const [isSwiping, setIsSwiping] = useState(false);
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
-  const swipingRef = useRef(false);
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [translateX, setTranslateX] = useState(0);
 
-  const onTouchStart = (e: React.TouchEvent) => {
-      touchStartRef.current = {
-          x: e.targetTouches[0].clientX,
-          y: e.targetTouches[0].clientY
-      };
-      setIsSwiping(false);
-      swipingRef.current = false;
-  };
-
+  const onTouchStart = (e: React.TouchEvent) => setTouchStart(e.targetTouches[0].clientX);
   const onTouchMove = (e: React.TouchEvent) => {
-      if (!touchStartRef.current || !onReply) return;
-
-      const currentX = e.targetTouches[0].clientX;
-      const currentY = e.targetTouches[0].clientY;
-      
-      const diffX = currentX - touchStartRef.current.x;
-      const diffY = currentY - touchStartRef.current.y;
-
-      // Lock Logic: If user scrolls vertically more than horizontally, ignore the swipe
-      // This prevents accidental swipes while scrolling the chat history
-      if (!swipingRef.current && Math.abs(diffY) > Math.abs(diffX)) {
-          touchStartRef.current = null; // Stop tracking for this interaction
-          return;
-      }
-
-      // Only allow swiping RIGHT (positive diffX)
-      if (diffX > 0) {
-          swipingRef.current = true;
-          setIsSwiping(true);
-          
-          // Elastic resistance effect
-          // Up to 80px it follows 1:1, after that it slows down (logarithmic feel)
-          const dampening = diffX > 80 ? 80 + (diffX - 80) * 0.3 : diffX;
-          
-          // Cap max visual drag to avoid pushing element off screen too much
-          setSwipeOffset(Math.min(dampening, 150)); 
-      }
+      if (touchStart === null) return;
+      const diff = e.targetTouches[0].clientX - touchStart;
+      if (diff > 0 && diff < 80) setTranslateX(diff);
   };
-
   const onTouchEnd = () => {
-      const THRESHOLD = 60;
-      
-      if (swipeOffset > THRESHOLD && onReply) {
-          onReply(message);
-          // Haptic feedback if available
-          if (navigator.vibrate) navigator.vibrate(15);
-      }
-      
-      // Reset
-      setSwipeOffset(0);
-      setIsSwiping(false);
-      touchStartRef.current = null;
-      swipingRef.current = false;
+      if (translateX > 40 && onReply) onReply(message);
+      setTranslateX(0); setTouchStart(null);
   };
-
-  // Determine Opacity/Scale of the Reply Icon based on drag distance
-  const iconScale = Math.min(swipeOffset / 50, 1); // 0 to 1
-  const iconOpacity = Math.min(swipeOffset / 40, 1);
 
   return (
-    <div 
-        className={`flex w-full mb-3 ${isOwn ? 'justify-end' : 'justify-start'} group relative select-none`}
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
+    <motion.div 
+        layout
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className={`flex w-full mb-3 ${isOwn ? 'justify-end' : 'justify-start'} group relative`}
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
     >
-      {/* Swipe Indicator (Hidden by default, visible during swipe) */}
-      <div 
-          className="absolute left-0 top-1/2 -translate-y-1/2 z-0 flex items-center justify-center pl-2 pointer-events-none transition-transform duration-75"
-          style={{ 
-              opacity: iconOpacity,
-              transform: `translateY(-50%) scale(${iconScale})`,
-              left: isOwn ? 'auto' : 0, 
-              right: isOwn ? '100%' : 'auto',
-              marginRight: isOwn ? -40 : 0
-          }}
+      {/* Swipe Indicator */}
+      <motion.div 
+        className="absolute left-0 top-1/2 -translate-y-1/2 text-brand-500 bg-brand-50 dark:bg-brand-900/30 p-2 rounded-full z-0 opacity-0" 
+        animate={{ x: translateX > 40 ? 10 : 0, opacity: translateX > 10 ? 1 : 0 }}
       >
-          <div className="bg-gray-200 dark:bg-gray-700 p-2 rounded-full text-gray-600 dark:text-gray-300 shadow-sm">
-             <Reply size={20} />
-          </div>
-      </div>
+          <Reply size={16} />
+      </motion.div>
 
       <div 
-        className={`flex items-end gap-2 max-w-[85%] z-10 relative ${isSwiping ? '' : 'transition-transform duration-300 ease-out'}`}
-        style={{ transform: `translateX(${swipeOffset}px)` }}
+        className="flex items-end gap-2 max-w-[85%] sm:max-w-[70%] transition-transform duration-200 z-10"
+        style={{ transform: `translateX(${translateX}px)` }}
       >
-        {/* Desktop Reply Button (Hover Only) */}
+        {/* PC Reply Button */}
         {onReply && !isDeleted && (
-             <button 
-                onClick={() => onReply(message)}
-                className={`hidden md:block opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-white dark:hover:bg-gray-600 text-gray-500 dark:text-gray-300 rounded-full shadow-sm mb-2 ${isOwn ? 'order-first' : 'order-last'}`}
-                title="Répondre"
-             >
+             <button onClick={() => onReply(message)} className={`opacity-0 group-hover:opacity-100 transition-all p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-400 ${isOwn ? 'order-first' : 'order-last'}`}>
                 <Reply size={14} />
              </button>
         )}
 
-        {/* Desktop Actions Menu (Edit/Delete) - Hidden on Touch devices usually handled by context menu or long press in full apps, here accessible via hover on desktop */}
+        {/* Action Menu */}
         {isOwn && !isDeleted && (
-            <div className="hidden md:flex opacity-0 group-hover:opacity-100 transition-opacity flex-col gap-1 mb-2">
-                {onEdit && (
-                    <button 
-                        onClick={() => onEdit(message)} 
-                        className="p-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-white dark:hover:bg-gray-600 text-gray-500 dark:text-gray-300 hover:text-blue-600 rounded-full shadow-sm transition-colors"
-                        title="Modifier"
-                    >
-                        <Pencil size={12} />
-                    </button>
-                )}
-                {onDelete && (
-                    <button 
-                        onClick={() => onDelete(message)} 
-                        className="p-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-white dark:hover:bg-gray-600 text-gray-500 dark:text-gray-300 hover:text-red-600 rounded-full shadow-sm transition-colors"
-                        title="Supprimer"
-                    >
-                        <Trash2 size={12} />
-                    </button>
-                )}
+            <div className="opacity-0 group-hover:opacity-100 transition-all flex flex-col gap-1 mb-2 absolute top-0 -left-8">
+                {onEdit && <button onClick={() => onEdit(message)} className="p-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-white text-gray-500 rounded-full shadow-sm"><Pencil size={10} /></button>}
+                {onDelete && <button onClick={() => onDelete(message)} className="p-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-white text-red-500 rounded-full shadow-sm"><Trash2 size={10} /></button>}
             </div>
         )}
 
-        <div
-          className={`relative px-4 py-2 shadow-sm flex flex-col ${
+        <div className={`relative px-4 py-2.5 shadow-sm flex flex-col ${
             isOwn 
-              ? 'bg-[#d9fdd3] dark:bg-orange-700 text-gray-900 dark:text-white rounded-2xl rounded-tr-sm' 
-              : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-2xl rounded-tl-sm'
-          } ${isDeleted ? 'opacity-70 bg-gray-100 dark:bg-gray-800 italic text-gray-500 dark:text-gray-400' : ''}`}
+              ? 'bg-gradient-to-br from-brand-500 to-brand-600 text-white rounded-2xl rounded-tr-sm' 
+              : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-2xl rounded-tl-sm border border-gray-100 dark:border-gray-700'
+          } ${isDeleted ? 'opacity-80 italic' : ''}`}
         >
-          
-          {/* Replied Message Preview */}
           {message.reply && !isDeleted && (
-              <div className={`mb-2 rounded-md p-2 border-l-4 text-xs cursor-pointer opacity-80 bg-black/5 dark:bg-white/10 ${isOwn ? 'border-green-600 dark:border-orange-400' : 'border-orange-500'}`}>
-                  <div className={`font-bold mb-0.5 ${isOwn ? 'text-green-800 dark:text-orange-200' : 'text-orange-700 dark:text-orange-400'}`}>
-                      {message.reply.sender}
-                  </div>
-                  <div className="truncate text-gray-600 dark:text-gray-300 line-clamp-1">
-                      {message.reply.content}
-                  </div>
+              <div className={`mb-2 rounded-lg p-2 text-xs border-l-2 bg-black/10 dark:bg-white/5 ${isOwn ? 'border-white/50 text-white/90' : 'border-brand-500 text-gray-600 dark:text-gray-300'}`}>
+                  <div className="font-bold opacity-90 mb-0.5">{message.reply.sender}</div>
+                  <div className="truncate opacity-80">{message.reply.content}</div>
               </div>
           )}
 
           {!isOwn && !isDeleted && (
-            <div className="text-xs font-bold text-green-600 dark:text-orange-400 mb-1 opacity-90">
+            <div className="text-[10px] font-bold text-brand-600 dark:text-brand-400 mb-1 uppercase tracking-wide">
               {message.sender_username}
             </div>
           )}
           
-          <p className="text-[15px] leading-relaxed whitespace-pre-wrap break-words min-w-[80px]">
-              {isDeleted ? (
-                  <span className="flex items-center gap-1 text-sm">
-                      🚫 <span className="text-xs">Ce message a été supprimé</span>
-                  </span>
-              ) : (
-                  renderContent(message.content)
-              )}
-          </p>
+          <div className="text-[15px] leading-relaxed break-words whitespace-pre-wrap">
+              {isDeleted ? <span className="flex items-center gap-1.5 text-sm opacity-80"><Trash2 size={12}/> Message supprimé</span> : renderContent(message.content)}
+          </div>
           
-          <div className={`flex items-center justify-end gap-1 mt-1 text-gray-400 dark:text-gray-300`}>
-            {isEdited && (
-                <span className="text-[10px] mr-1 italic">(modifié)</span>
-            )}
-            <span className="text-[10px]">
+          <div className={`flex items-center justify-end gap-1 mt-1 ${isOwn ? 'text-brand-100' : 'text-gray-400'}`}>
+            {isEdited && <span className="text-[10px] opacity-80">modifié</span>}
+            <span className="text-[10px] opacity-80">
               {new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
             {isOwn && !isDeleted && (
-                isReadByOthers ? (
-                    <CheckCheck size={14} className="opacity-100 text-blue-500 dark:text-blue-400" />
-                ) : (
-                    <Check size={14} className="opacity-80 text-gray-400 dark:text-gray-300" />
-                )
+                isReadByOthers 
+                    ? <CheckCheck size={14} className="text-white" /> 
+                    : <Check size={14} className="text-white/60" />
             )}
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 };

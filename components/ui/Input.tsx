@@ -9,17 +9,22 @@ export const Input: React.FC<InputProps> = ({ label, error, className = '', ...p
   return (
     <div className="mb-4">
       {label && (
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5 ml-1">
           {label}
         </label>
       )}
       <input
-        className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-orange-500 focus:border-orange-500 transition-colors 
-        bg-white dark:bg-gray-700 dark:text-white dark:border-gray-600
-        ${error ? 'border-red-500 dark:border-red-500' : 'border-gray-300'} ${className}`}
+        className={`w-full px-4 py-3 border rounded-xl shadow-sm outline-none transition-all duration-200
+        bg-gray-50 dark:bg-gray-800/50 text-gray-900 dark:text-white
+        placeholder-gray-400 dark:placeholder-gray-500
+        focus:bg-white dark:focus:bg-gray-800 focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500
+        ${error 
+            ? 'border-red-500 dark:border-red-500 focus:ring-red-500/20' 
+            : 'border-gray-200 dark:border-gray-700'
+        } ${className}`}
         {...props}
       />
-      {error && <p className="mt-1 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p className="mt-1.5 ml-1 text-xs font-medium text-red-500 animate-pulse">{error}</p>}
     </div>
   );
 };

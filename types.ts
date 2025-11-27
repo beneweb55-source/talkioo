@@ -4,7 +4,6 @@ export interface User {
   tag: string; // ex: 1234
   email: string;
   created_at: string;
-  is_online?: boolean;
 }
 
 export interface Conversation {
@@ -14,8 +13,6 @@ export interface Conversation {
   created_at: string;
   last_message?: string;
   last_message_at?: string;
-  group_id?: string; // Lien vers la table groups
-  my_role?: 'owner' | 'admin' | 'member'; // Rôle de l'utilisateur courant
 }
 
 export interface Participant {
@@ -23,15 +20,6 @@ export interface Participant {
   conversation_id: string;
   joined_at: string;
   last_deleted_at?: string | null; // For Soft Delete logic
-}
-
-export interface GroupMember {
-  user_id: string;
-  username: string;
-  tag: string;
-  role: 'owner' | 'admin' | 'member';
-  joined_at: string;
-  is_online?: boolean;
 }
 
 export interface Message {

@@ -2,7 +2,6 @@
   "name": "realtime-chat-mvp",
   "private": true,
   "version": "0.0.0",
-  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -24,7 +23,6 @@
     "cloudinary": "^2.0.1",
     "react-dom": "^19.2.0",
     "socket.io": "^4.7.5",
-    "emoji-picker-react": "^4.9.2"
     "socket.io-client": "^4.7.5",
     "web-push": "^3.6.7"
   },

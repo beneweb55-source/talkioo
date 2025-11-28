@@ -38,6 +38,7 @@ const pool = new Pool({
 // --- HELPER FUNCTIONS ---
 const getAggregatedReactions = async (messageId) => {
     try {
+        // Retourne un tableau d'objets { emoji, user_id }
         const res = await pool.query('SELECT emoji, user_id FROM message_reactions WHERE message_id = $1', [messageId]);
         return res.rows;
     } catch (err) {
@@ -118,8 +119,7 @@ const authenticateToken = (req, res, next) => {
 
 // --- ROUTES ---
 
-// 1. REACTIONS ROUTE (Priority High)
-// Defines POST /api/messages/:id/react
+// 1. REACTIONS ROUTE (Priority High - Explicit Definition)
 app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
     const messageId = req.params.id;
     const userId = req.user.id;
@@ -128,7 +128,7 @@ app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
     console.log(`[DEBUG-REACTION] Réaction reçue pour message ${messageId} par ${userId} : ${emoji}`);
 
     try {
-        // 1. Check if message exists
+        // 1. Check if message exists and get conversation ID
         const msgCheck = await pool.query('SELECT conversation_id FROM messages WHERE id = $1', [messageId]);
         if (msgCheck.rows.length === 0) {
             console.log(`[DEBUG-REACTION] Message ${messageId} not found`);
@@ -174,7 +174,7 @@ app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
     }
 });
 
-console.log("[SERVER STARTUP] Route /api/messages/:id/react registered.");
+console.log("[SERVER STARTUP] Route /api/messages/:id/react registered successfully.");
 
 app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
 

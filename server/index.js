@@ -102,6 +102,54 @@ const authenticateToken = (req, res, next) => {
 // --- ROUTES ---
 app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
 
+// --- REACTIONS (CRITICAL: PLACED FIRST) ---
+app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
+    const messageId = req.params.id;
+    const userId = req.user.id;
+    const { emoji } = req.body;
+    console.log(`[REACTION] User ${userId} reacting with ${emoji} to msg ${messageId}`);
+
+    try {
+        if (!emoji) return res.status(400).json({ error: "Emoji requis" });
+
+        // Check if message exists
+        const msgRes = await pool.query(`
+            SELECT m.conversation_id 
+            FROM messages m 
+            JOIN participants p ON p.conversation_id = m.conversation_id 
+            WHERE m.id = $1 AND p.user_id = $2
+        `, [messageId, userId]);
+
+        if (msgRes.rows.length === 0) {
+            return res.status(404).json({ error: "Message introuvable ou accès refusé" });
+        }
+
+        const conversationId = msgRes.rows[0].conversation_id;
+
+        // Toggle logic
+        const existingRes = await pool.query(
+            'SELECT * FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3',
+            [messageId, userId, emoji]
+        );
+
+        if (existingRes.rows.length > 0) {
+            await pool.query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [messageId, userId, emoji]);
+        } else {
+            await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [messageId, userId, emoji]);
+        }
+
+        const reactionsRes = await pool.query('SELECT emoji, user_id FROM message_reactions WHERE message_id = $1', [messageId]);
+        const reactions = reactionsRes.rows;
+
+        io.to(conversationId).emit('message_reaction_update', { messageId, reactions });
+        res.json({ success: true, reactions });
+
+    } catch (err) {
+        console.error("Reaction Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/auth/register', async (req, res) => {
     let { username, email, password } = req.body;
     try {
@@ -258,54 +306,6 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
         `, [req.params.id, req.user.id]);
         res.json(result.rows[0]?.user_data || null);
     } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- REACTIONS (PLACED BEFORE /messages GET) ---
-app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
-    const messageId = req.params.id;
-    const userId = req.user.id;
-    const { emoji } = req.body;
-    console.log(`[REACTION] User ${userId} reacting with ${emoji} to msg ${messageId}`);
-
-    try {
-        if (!emoji) return res.status(400).json({ error: "Emoji requis" });
-
-        // Check if message exists and user is part of conversation
-        const msgRes = await pool.query(`
-            SELECT m.conversation_id 
-            FROM messages m 
-            JOIN participants p ON p.conversation_id = m.conversation_id 
-            WHERE m.id = $1 AND p.user_id = $2
-        `, [messageId, userId]);
-
-        if (msgRes.rows.length === 0) {
-            return res.status(403).json({ error: "Message introuvable ou accès refusé" });
-        }
-
-        const conversationId = msgRes.rows[0].conversation_id;
-
-        // Toggle logic
-        const existingRes = await pool.query(
-            'SELECT * FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3',
-            [messageId, userId, emoji]
-        );
-
-        if (existingRes.rows.length > 0) {
-            await pool.query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [messageId, userId, emoji]);
-        } else {
-            await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)', [messageId, userId, emoji]);
-        }
-
-        const reactionsRes = await pool.query('SELECT emoji, user_id FROM message_reactions WHERE message_id = $1', [messageId]);
-        const reactions = reactionsRes.rows;
-
-        io.to(conversationId).emit('message_reaction_update', { messageId, reactions });
-        res.json({ success: true, reactions });
-
-    } catch (err) {
-        console.error("Reaction Error:", err);
-        res.status(500).json({ error: err.message });
-    }
 });
 
 // MESSAGES GET

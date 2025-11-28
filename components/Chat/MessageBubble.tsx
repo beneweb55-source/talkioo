@@ -68,17 +68,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       setTranslateX(0); setTouchStart(null);
   };
 
-  // Sécurisation du contenu texte
   const safeContent = message.content || "";
-  
-  // Détection du type de message : On vérifie attachment_url ET le fallback image_url
   const attachmentUrl = message.attachment_url || message.image_url;
   const isLegacyBase64 = safeContent.startsWith('data:image');
-  
-  // On considère que c'est une image si URL présente OU si le type est déclaré 'image'
   const isImage = !!attachmentUrl || isLegacyBase64 || message.message_type === 'image';
 
-  // Agrégation des réactions
   const reactionCounts: { [emoji: string]: { count: number, hasReacted: boolean } } = {};
   if (message.reactions) {
       message.reactions.forEach(r => {
@@ -111,14 +105,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         className="flex items-end gap-2 max-w-[85%] sm:max-w-[70%] transition-transform duration-200 z-10"
         style={{ transform: `translateX(${translateX}px)` }}
       >
-        {/* Actions Gauche (Reply) */}
         {onReply && !isDeleted && (
              <button onClick={() => onReply(message)} className={`opacity-0 group-hover:opacity-100 transition-all p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-400 ${isOwn ? 'order-first' : 'order-last'}`}>
                 <Reply size={14} />
              </button>
         )}
         
-        {/* Actions Own (Edit/Delete) */}
         {isOwn && !isDeleted && !isImage && (
             <div className="opacity-0 group-hover:opacity-100 transition-all flex flex-col gap-1 mb-2 absolute top-0 -left-8">
                 {onEdit && <button onClick={() => onEdit(message)} className="p-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-white text-gray-500 rounded-full shadow-sm"><Pencil size={10} /></button>}
@@ -160,13 +152,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   <>
                       {isImage && (
                           <div className={`my-1 mb-2 relative w-full bg-gray-100 dark:bg-gray-800/50 rounded-lg overflow-hidden flex items-center justify-center min-h-[200px]`}>
-                             
                              {!imgLoaded && !imgError && (
                                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-100/50 dark:bg-gray-800/50 backdrop-blur-[2px]">
                                     <Loader2 className="animate-spin text-brand-500" size={32} />
                                 </div>
                              )}
-                             
                              {imgError ? (
                                 <div className="flex flex-col items-center justify-center text-red-500 gap-2 p-4 w-full h-full min-h-[200px] bg-red-50 dark:bg-red-900/10">
                                     <AlertTriangle size={24} />
@@ -213,7 +203,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
             )}
           </div>
 
-          {/* Reactions */}
           {!isDeleted && (
             <div className="flex flex-wrap gap-1 mt-2 -mb-5 relative z-20">
               {Object.entries(reactionCounts).map(([emoji, { count, hasReacted }]) => (
@@ -243,8 +232,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   {showEmojiPicker && (
                     <div 
                         ref={pickerRef} 
-                        className={`absolute bottom-full mb-2 p-2 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 flex gap-1 z-50 ${isOwn ? 'right-0' : 'left-0'}`}
-                        style={{ minWidth: 'max-content' }}
+                        className={`absolute bottom-full mb-2 p-2 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 flex flex-wrap gap-1 z-50 max-w-[200px] w-max ${isOwn ? 'right-0' : 'left-0'}`}
                     >
                         {COMMON_EMOJIS.map(emoji => (
                             <button

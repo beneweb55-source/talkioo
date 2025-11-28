@@ -20,12 +20,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [headerName, setHeaderName] = useState('');
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
   
-  // États pour la gestion d'image
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
 
-  // État pour le sélecteur d'émojis
   const [showInputEmoji, setShowInputEmoji] = useState(false);
 
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
@@ -50,7 +48,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     }
   }, [inputText]);
 
-  // Fermer le sélecteur d'émoji si on clique ailleurs
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
         if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node) && 
@@ -123,24 +120,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }
 
         setMessages(prev => {
-            // Si le message existe déjà (ajouté par l'API ou socket doublon), on met à jour
             const exists = prev.find(m => m.id === newMessage.id);
             if (exists) {
-                // PROTECTION CRITIQUE : Si le message existant a une URL mais que le nouveau (socket) n'en a pas
-                // (ce qui peut arriver si le socket est broadcasté avant que l'URL ne soit persistée),
-                // on garde l'ancienne URL pour éviter la disparition de l'image.
                 if (exists.attachment_url && !newMessage.attachment_url) {
                     console.warn("[FRONTEND] Conservation de l'URL existante pour éviter écrasement par Socket vide");
                     return prev.map(m => m.id === newMessage.id ? { 
                         ...newMessage, 
                         attachment_url: exists.attachment_url,
-                        image_url: exists.attachment_url // Fallback
+                        image_url: exists.attachment_url 
                     } : m);
                 }
-                
                 return prev.map(m => m.id === newMessage.id ? newMessage : m);
             }
-            
             return [...prev, newMessage];
         });
         
@@ -183,7 +174,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     const text = inputText.slice(0, cursor) + emojiData.emoji + inputText.slice(cursor);
     setInputText(text);
     
-    // Remettre le focus et replacer le curseur après l'émoji (petit délai nécessaire)
     setTimeout(() => {
         if(textareaRef.current) {
             textareaRef.current.focus();
@@ -203,26 +193,23 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-        // --- VALIDATION TYPE ---
         const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
         if (!validTypes.includes(file.type)) {
             alert("Format non supporté. Veuillez utiliser JPG, PNG, GIF ou WEBP.");
-            e.target.value = ''; // Reset input
+            e.target.value = ''; 
             return;
         }
-
-        // --- VALIDATION TAILLE (10MB) ---
-        const maxSize = 10 * 1024 * 1024; // 10 Mo
+        const maxSize = 10 * 1024 * 1024; 
         if (file.size > maxSize) {
             alert("L'image est trop volumineuse. Taille maximum : 10 Mo.");
-            e.target.value = ''; // Reset input
+            e.target.value = ''; 
             return;
         }
 
         const previewUrl = URL.createObjectURL(file);
         setSelectedFile(file);
         setImagePreview(previewUrl);
-        e.target.value = ''; // Reset pour permettre de re-sélectionner le même fichier si besoin
+        e.target.value = ''; 
     }
   };
 
@@ -234,9 +221,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   const handleReaction = async (msg: Message, emoji: string) => {
       try {
-          // Optimistic update
-          // Note: Implementing complex optimistic updates for aggregation is tricky, 
-          // we rely on fast server response + socket here for simplicity or simple toggle.
           await reactToMessageAPI(msg.id, emoji);
       } catch (error) {
           console.error("Reaction failed", error);
@@ -260,7 +244,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     const fileToSend = selectedFile; 
     const currentPreview = imagePreview; 
 
-    // Reset UI immédiat
     setInputText('');
     setSelectedFile(null);
     setImagePreview(null);
@@ -270,7 +253,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         textareaRef.current.focus();
     }
 
-    // UI OPTIMISTE
     const tempId = 'temp_' + Date.now();
     const optimisticMsg: Message = {
         id: tempId,
@@ -294,7 +276,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             await editMessageAPI(editingMessage.id, textToSend);
             setEditingMessage(null);
         } else {
-            // Envoi réel API
             const newMessage = await sendMessageAPI(
                 conversation.id, 
                 currentUser.id, 
@@ -304,31 +285,21 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 fileToSend || undefined
             );
 
-            // LOGIQUE DE DÉDUPLICATION ET REMPLACEMENT
             setMessages(prev => {
-                // Vérifier si le message réel a déjà été ajouté par le Socket (course condition)
                 const alreadyExists = prev.find(m => m.id === newMessage.id);
-                
                 if (alreadyExists) {
-                    // Si le message existe déjà via Socket, on vérifie s'il a bien l'URL
                     if (!alreadyExists.attachment_url && newMessage.attachment_url) {
-                         // Le socket a mis un message vide ? On force la mise à jour avec la réponse API
                          console.warn("[FRONTEND] Correction du message Socket incomplet via réponse API");
                          return prev.map(m => m.id === newMessage.id ? newMessage : m).filter(m => m.id !== tempId);
                     }
-                    // Sinon on retire juste le temporaire
                     return prev.filter(m => m.id !== tempId);
                 }
-                
-                // Sinon, on remplace le temporaire par le vrai
                 return prev.map(m => m.id === tempId ? newMessage : m);
             });
         }
     } catch (err: any) {
         console.error("Erreur envoi:", err);
         alert(`Erreur d'envoi: ${err.message || "Erreur inconnue"}`);
-        
-        // Rollback
         setMessages(prev => prev.filter(m => m.id !== tempId));
         setInputText(textToSend);
         if (fileToSend) {
@@ -348,7 +319,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" 
              style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
 
-        {/* Header */}
         <div className="h-[70px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-gray-800/50 flex items-center justify-between px-4 z-20 shadow-sm flex-shrink-0">
             <div className="flex items-center gap-3">
                 <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10">
@@ -373,7 +343,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             </div>
         </div>
 
-        {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-2 z-10 no-scrollbar">
             {loading ? (
                 <div className="flex justify-center mt-10"><Loader2 className="animate-spin text-brand-500" size={32} /></div>
@@ -404,7 +373,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area */}
         <div className="p-2 z-20 bg-transparent flex-shrink-0 relative">
             <AnimatePresence>
                 {showInputEmoji && (
@@ -413,13 +381,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         initial={{ opacity: 0, y: 20, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                        className="absolute bottom-[80px] left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
+                        className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
+                        style={{ width: 'min(350px, 90vw)' }}
                     >
                         <EmojiPicker 
                             theme={Theme.AUTO}
                             onEmojiClick={onEmojiClick}
                             searchPlaceHolder="Rechercher..."
-                            width={320}
+                            width="100%"
                             height={400}
                         />
                     </motion.div>

@@ -3,151 +3,118 @@ import { useAuth } from '../../context/AuthContext';
 import { updateProfileAPI, updatePasswordAPI } from '../../services/api';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { User, Lock, Save, X, AlertTriangle, CheckCircle } from 'lucide-react';
+import { X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface UserProfileProps {
-    onClose: () => void;
+  onClose: () => void;
 }
 
 export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
-    const { user, login, token } = useAuth();
-    const [activeTab, setActiveTab] = useState<'info' | 'security'>('info');
-    const [loading, setLoading] = useState(false);
-    const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const { user, login } = useAuth();
+  const [activeTab, setActiveTab] = useState<'profile' | 'password'>('profile');
+  
+  const [username, setUsername] = useState(user?.username || '');
+  const [email, setEmail] = useState(user?.email || '');
+  
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  
+  const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
 
-    // Info State
-    const [username, setUsername] = useState(user?.username || '');
-    const [email, setEmail] = useState(user?.email || '');
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setMessage(null);
+    try {
+      // Correction: Call with single argument (data object)
+      const updatedUser = await updateProfileAPI({ username, email });
+      
+      // Update context if successful
+      if (updatedUser) {
+          const currentToken = localStorage.getItem('talkio_auth_token') || '';
+          login(updatedUser, currentToken);
+      }
+      setMessage({ text: "Profil mis à jour avec succès !", type: 'success' });
+    } catch (err: any) {
+      setMessage({ text: err.message || "Erreur lors de la mise à jour", type: 'error' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    // Password State
-    const [currentPassword, setCurrentPassword] = useState('');
-    const [newPassword, setNewPassword] = useState('');
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setMessage(null);
+    try {
+      // Correction: Call with single argument (data object)
+      await updatePasswordAPI({ oldPassword, newPassword });
+      setMessage({ text: "Mot de passe modifié !", type: 'success' });
+      setOldPassword('');
+      setNewPassword('');
+    } catch (err: any) {
+      setMessage({ text: err.message || "Erreur lors du changement de mot de passe", type: 'error' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    const handleUpdateInfo = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setMessage(null);
-        try {
-            const updatedUser = await updateProfileAPI(username, email);
-            if(token) login(updatedUser, token);
-            setMessage({ type: 'success', text: 'Profil mis à jour avec succès !' });
-        } catch (err: any) {
-            setMessage({ type: 'error', text: err.message || 'Erreur lors de la mise à jour' });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleUpdatePassword = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setMessage(null);
-        try {
-            await updatePasswordAPI(currentPassword, newPassword);
-            setMessage({ type: 'success', text: 'Mot de passe modifié !' });
-            setCurrentPassword('');
-            setNewPassword('');
-        } catch (err: any) {
-            setMessage({ type: 'error', text: err.message || 'Erreur mot de passe' });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-700 animate-in fade-in zoom-in duration-200">
-                
-                {/* Header */}
-                <div className="bg-gray-50 dark:bg-gray-900 px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 bg-orange-600 rounded-full flex items-center justify-center text-white font-bold shadow-sm">
-                            {user?.username.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                            <h2 className="font-bold text-gray-800 dark:text-white text-lg">Mon Profil</h2>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">#{user?.tag}</p>
-                        </div>
-                    </div>
-                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1">
-                        <X size={24} />
-                    </button>
-                </div>
-
-                {/* Tabs */}
-                <div className="flex border-b border-gray-100 dark:border-gray-700">
-                    <button 
-                        onClick={() => { setActiveTab('info'); setMessage(null); }}
-                        className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${activeTab === 'info' ? 'text-orange-600 border-b-2 border-orange-600 bg-orange-50 dark:bg-orange-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
-                    >
-                        <User size={16} /> Informations
-                    </button>
-                    <button 
-                        onClick={() => { setActiveTab('security'); setMessage(null); }}
-                        className={`flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${activeTab === 'security' ? 'text-orange-600 border-b-2 border-orange-600 bg-orange-50 dark:bg-orange-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
-                    >
-                        <Lock size={16} /> Sécurité
-                    </button>
-                </div>
-
-                {/* Content */}
-                <div className="p-6 overflow-y-auto">
-                    {message && (
-                        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center gap-2 ${message.type === 'success' ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400'}`}>
-                            {message.type === 'success' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
-                            {message.text}
-                        </div>
-                    )}
-
-                    {activeTab === 'info' ? (
-                        <form onSubmit={handleUpdateInfo} className="space-y-4">
-                            <Input 
-                                label="Nom d'utilisateur" 
-                                value={username} 
-                                onChange={(e) => setUsername(e.target.value)} 
-                                placeholder="Votre pseudo"
-                            />
-                            <Input 
-                                label="Email" 
-                                type="email" 
-                                value={email} 
-                                onChange={(e) => setEmail(e.target.value)} 
-                                placeholder="email@exemple.com"
-                            />
-                            <div className="bg-gray-50 dark:bg-gray-700/50 p-3 rounded text-xs text-gray-500 dark:text-gray-400">
-                                Note: Votre Tag <b>#{user?.tag}</b> est unique et ne peut pas être modifié.
-                            </div>
-                            <div className="pt-2">
-                                <Button type="submit" isLoading={loading} className="flex items-center justify-center gap-2">
-                                    <Save size={18} /> Enregistrer
-                                </Button>
-                            </div>
-                        </form>
-                    ) : (
-                        <form onSubmit={handleUpdatePassword} className="space-y-4">
-                            <Input 
-                                label="Mot de passe actuel" 
-                                type="password" 
-                                value={currentPassword} 
-                                onChange={(e) => setCurrentPassword(e.target.value)} 
-                                required
-                            />
-                            <Input 
-                                label="Nouveau mot de passe" 
-                                type="password" 
-                                value={newPassword} 
-                                onChange={(e) => setNewPassword(e.target.value)} 
-                                required
-                            />
-                            <div className="pt-2">
-                                <Button type="submit" isLoading={loading} className="flex items-center justify-center gap-2">
-                                    <Save size={18} /> Changer le mot de passe
-                                </Button>
-                            </div>
-                        </form>
-                    )}
-                </div>
+  return (
+    <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-800 relative">
+      <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <X size={20} />
+      </button>
+      
+      <div className="flex flex-col items-center mb-6">
+        <div className="relative group">
+            <div className="h-20 w-20 bg-gradient-to-tr from-brand-400 to-brand-600 rounded-full flex items-center justify-center text-white text-3xl font-bold shadow-lg">
+                {user?.username?.charAt(0).toUpperCase()}
             </div>
         </div>
-    );
+        <h2 className="mt-3 text-xl font-bold dark:text-white">{user?.username}</h2>
+        <span className="text-sm text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded">#{user?.tag}</span>
+      </div>
+
+      <div className="flex gap-2 mb-6 border-b border-gray-100 dark:border-gray-800 pb-1">
+        <button 
+            onClick={() => setActiveTab('profile')}
+            className={`flex-1 pb-2 text-sm font-medium transition-colors relative ${activeTab === 'profile' ? 'text-brand-600 dark:text-brand-400' : 'text-gray-500'}`}
+        >
+            Profil
+            {activeTab === 'profile' && <motion.div layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
+        </button>
+        <button 
+            onClick={() => setActiveTab('password')}
+            className={`flex-1 pb-2 text-sm font-medium transition-colors relative ${activeTab === 'password' ? 'text-brand-600 dark:text-brand-400' : 'text-gray-500'}`}
+        >
+            Sécurité
+            {activeTab === 'password' && <motion.div layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
+        </button>
+      </div>
+
+      <AnimatePresence>
+      {message && (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className={`mb-4 p-3 rounded-lg text-sm text-center ${message.type === 'success' ? 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400' : 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400'}`}>
+            {message.text}
+        </motion.div>
+      )}
+      </AnimatePresence>
+
+      {activeTab === 'profile' ? (
+        <form onSubmit={handleUpdateProfile} className="space-y-4">
+            <Input label="Nom d'utilisateur" value={username} onChange={e => setUsername(e.target.value)} required />
+            <Input label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
+            <Button type="submit" isLoading={isLoading}>Enregistrer</Button>
+        </form>
+      ) : (
+        <form onSubmit={handleUpdatePassword} className="space-y-4">
+            <Input label="Ancien mot de passe" type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} required />
+            <Input label="Nouveau mot de passe" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
+            <Button type="submit" isLoading={isLoading}>Changer le mot de passe</Button>
+        </form>
+      )}
+    </div>
+  );
 };

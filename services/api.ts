@@ -5,12 +5,15 @@ import { User, Conversation, Message, AuthResponse, FriendRequest } from '../typ
 // Detect if we are running locally to switch between Localhost and Render
 const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-// If local, use port 3001 (standard node server), else use production URL
-const API_BASE = isLocal ? 'http://localhost:3001' : 'https://talkioo.onrender.com';
+// CORRECTION MAJEURE : 
+// En local, on utilise une chaine vide '' pour que les requêtes soient relatives (ex: /api/messages).
+// Cela permet à Vite (vite.config.ts) d'intercepter la requête et de la rediriger vers le port 3001 via le Proxy.
+// Cela règle les problèmes de CORS et de "Impossible de joindre le serveur".
+const API_BASE = isLocal ? '' : 'https://talkioo.onrender.com';
 const API_URL = `${API_BASE}/api`;
 
-console.log(`[Talkio] Environment: ${isLocal ? 'Local' : 'Production'}`);
-console.log(`[Talkio] Connecting to Backend: ${API_BASE}`);
+console.log(`[Talkio] Environment: ${isLocal ? 'Local (via Proxy)' : 'Production'}`);
+console.log(`[Talkio] API Target: ${API_URL}`);
 
 // --- SOCKET INSTANCE ---
 let socket: Socket;
@@ -18,9 +21,10 @@ let socket: Socket;
 export const connectSocket = (token: string, userId: string) => {
     if (socket && socket.connected) return;
     
-    // IMPORTANT: Sending userId in query is crucial for the backend to link socketID <-> UserID
-    // for online status updates.
-    socket = io(API_BASE, {
+    // Pour le socket, en local on doit viser le port 3001 explicitement car le proxy WebSocket de Vite peut être capricieux
+    const SOCKET_URL = isLocal ? 'http://localhost:3001' : 'https://talkioo.onrender.com';
+
+    socket = io(SOCKET_URL, {
         auth: { token },
         query: { userId }, 
         transports: ['websocket', 'polling'], 
@@ -46,11 +50,10 @@ export const disconnectSocket = () => {
 const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
     const token = localStorage.getItem('talkio_auth_token');
     
-    // DO NOT set Content-Type if it is FormData (browser handles it)
     const headers: HeadersInit = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
     
-    // Only set JSON content type if it's not FormData
+    // Si ce n'est pas du FormData, on définit JSON
     if (!(options.body instanceof FormData)) {
         headers['Content-Type'] = 'application/json';
     }
@@ -61,15 +64,13 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
             headers: { ...headers, ...options.headers }
         });
         
-        // Check content type to avoid crashing on HTML 404s
         const contentType = response.headers.get("content-type");
         let data;
         if (contentType && contentType.indexOf("application/json") !== -1) {
             data = await response.json();
         } else {
-            // If not JSON (likely HTML error page), throw generic error or text
             const text = await response.text();
-            throw new Error(`Erreur serveur (${response.status}): Endpoint introuvable ou erreur interne.`);
+            throw new Error(`Erreur serveur (${response.status}): ${text || response.statusText}`);
         }
         
         if (!response.ok) {
@@ -79,7 +80,7 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
         return data;
     } catch (error: any) {
         if (error.message === 'Failed to fetch') {
-            throw new Error("Impossible de joindre le serveur. Il démarre peut-être ? (Attendez 30s)");
+            throw new Error("Impossible de joindre le serveur. Vérifiez que le backend (port 3001) tourne.");
         }
         console.error(`API Error (${endpoint}):`, error.message);
         throw error;
@@ -134,32 +135,33 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
 
 export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image' = 'text', file?: File): Promise<Message> => {
     
-    // UPDATED: Use FormData if a file is present to support Multer/Cloudinary
     if (file) {
         if (file.size > 10 * 1024 * 1024) throw new Error("Image trop volumineuse (Max 10Mo)");
         
         const formData = new FormData();
+        
+        // Bonne pratique : Ajouter les champs texte AVANT le fichier pour aider le parseur côté serveur
         formData.append('conversation_id', conversationId);
         
-        // CRITICAL FIX: Ensure 'content' is strictly a string, even if empty.
-        // This prevents the backend receiving 'undefined'/'null' and violating SQL NOT NULL constraint.
+        // On s'assure que le contenu est une chaîne vide valide et non null/undefined
         const safeContent = (content === null || content === undefined) ? "" : String(content);
         formData.append('content', safeContent);
         
         if (repliedToId) formData.append('replied_to_message_id', repliedToId);
-        formData.append('media', file); // 'media' field for Multer
+        
+        // Le fichier en dernier
+        formData.append('media', file);
         
         return await fetchWithAuth('/messages', { 
             method: 'POST', 
             body: formData 
         });
     } else {
-        // Legacy JSON path for text-only
         return await fetchWithAuth('/messages', { 
             method: 'POST', 
             body: JSON.stringify({ 
                 conversation_id: conversationId, 
-                content, // JSON stringify handles empty strings correctly
+                content: content || "", 
                 replied_to_message_id: repliedToId,
                 message_type: 'text'
             }) 
@@ -266,7 +268,6 @@ export const subscribeToUserStatus = (onStatusChange: (userId: string, isOnline:
     const handler = (data: { userId: string, isOnline: boolean }) => {
         onStatusChange(data.userId, data.isOnline);
     };
-    // UPDATED: Listen to the correct event name sent by the backend
     socket.on('USER_STATUS_UPDATE', handler);
     return () => socket.off('USER_STATUS_UPDATE', handler);
 };
@@ -286,7 +287,6 @@ export const subscribeToConversationsList = (onUpdate: () => void) => {
         onUpdate();
     };
     
-    // Listen to Global User Events
     socket.on('conversation_added', handler);
     socket.on('conversation_updated', handler);
     socket.on('request_accepted', handler); 

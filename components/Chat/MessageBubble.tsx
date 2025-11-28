@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Message } from '../../types';
-import { Check, CheckCheck, Pencil, Trash2, Reply } from 'lucide-react';
+import { Check, CheckCheck, Pencil, Trash2, Reply, ImageIcon, AlertTriangle, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface MessageBubbleProps {
@@ -46,6 +46,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
 
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [translateX, setTranslateX] = useState(0);
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const [imgError, setImgError] = useState(false);
 
   const onTouchStart = (e: React.TouchEvent) => setTouchStart(e.targetTouches[0].clientX);
   const onTouchMove = (e: React.TouchEvent) => {
@@ -58,7 +60,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       setTranslateX(0); setTouchStart(null);
   };
 
-  const isBase64Image = message.content.startsWith('data:image');
+  // Safe access to content to prevent crash on NULL values from DB
+  const safeContent = message.content || "";
+  const isBase64Image = safeContent.startsWith('data:image');
   const hasAttachment = !!message.attachment_url;
   const isImage = isBase64Image || hasAttachment;
 
@@ -112,7 +116,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
           {message.reply && !isDeleted && (
               <div className={`mb-2 rounded-lg p-2 text-xs border-l-2 bg-black/10 dark:bg-white/5 ${isOwn ? 'border-white/50 text-white/90' : 'border-brand-500 text-gray-600 dark:text-gray-300'}`}>
                   <div className="font-bold opacity-90 mb-0.5">{message.reply.sender}</div>
-                  <div className="truncate opacity-80">{message.reply.content.startsWith('data:image') || message.reply.attachment_url ? '📷 Photo' : message.reply.content}</div>
+                  <div className="truncate opacity-80">
+                    {(message.reply.content || "").startsWith('data:image') || message.reply.attachment_url ? '📷 Photo' : (message.reply.content || "")}
+                  </div>
               </div>
           )}
 
@@ -129,18 +135,35 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   <>
                       {/* Render Attachment Image if present */}
                       {message.attachment_url && (
-                          <div className="my-1 mb-2">
-                             <img 
-                                src={message.attachment_url} 
-                                alt="Image envoyée" 
-                                className="rounded-lg max-w-full max-h-[300px] object-cover border border-black/10 dark:border-white/10 cursor-pointer"
-                                onClick={() => window.open(message.attachment_url, '_blank')}
-                             />
+                          <div className="my-1 mb-2 relative min-h-[50px] min-w-[50px]">
+                             {/* Placeholder during load */}
+                             {!imgLoaded && !imgError && (
+                                <div className="absolute inset-0 bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-center z-0">
+                                    <Loader2 className="animate-spin text-brand-500" size={24} />
+                                </div>
+                             )}
+                             
+                             {/* Error State */}
+                             {imgError ? (
+                                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 flex flex-col items-center justify-center text-red-500 gap-1 min-h-[100px] w-full">
+                                    <AlertTriangle size={20} />
+                                    <span className="text-xs font-medium">Erreur chargement</span>
+                                </div>
+                             ) : (
+                                <img 
+                                    src={message.attachment_url} 
+                                    alt="Image envoyée" 
+                                    className="relative z-10 rounded-lg max-w-full max-h-[300px] object-cover border border-black/10 dark:border-white/10 cursor-pointer"
+                                    onClick={() => window.open(message.attachment_url, '_blank')}
+                                    onLoad={() => setImgLoaded(true)}
+                                    onError={() => { setImgError(true); setImgLoaded(true); }}
+                                />
+                             )}
                           </div>
                       )}
                       
                       {/* Render Text Content if present */}
-                      {renderContent(message.content)}
+                      {renderContent(safeContent)}
                   </>
               )}
           </div>

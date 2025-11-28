@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts } from '../../services/api';
+import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2 } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -24,6 +25,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
 
+  // État pour le sélecteur d'émojis
+  const [showInputEmoji, setShowInputEmoji] = useState(false);
+
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
@@ -31,6 +35,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
       requestAnimationFrame(() => {
@@ -45,6 +50,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     }
   }, [inputText]);
 
+  // Fermer le sélecteur d'émoji si on clique ailleurs
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+        if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node) && 
+            !(event.target as Element).closest('.emoji-toggle-btn')) {
+            setShowInputEmoji(false);
+        }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   useEffect(() => {
       if (window.visualViewport) {
           const handleResize = () => scrollToBottom('auto');
@@ -58,6 +75,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   }, []);
 
   const handleInputFocus = () => {
+      setShowInputEmoji(false);
       setTimeout(() => scrollToBottom('auto'), 100);
       setTimeout(() => scrollToBottom('auto'), 300);
   };
@@ -130,6 +148,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         if (newMessage.sender_id !== currentUser.id) markMessagesAsReadAPI(conversation.id);
     });
 
+    const unsubscribeReactions = subscribeToReactionUpdates(conversation.id, (messageId, reactions) => {
+        setMessages(prev => prev.map(msg => 
+            msg.id === messageId ? { ...msg, reactions } : msg
+        ));
+    });
+
     const unsubscribeTyping = subscribeToTypingEvents(conversation.id, (userId, isTyping) => {
         setTypingUsers(prev => {
             const next = new Set(prev);
@@ -141,7 +165,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     
     const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => getMessagesAPI(conversation.id).then(setMessages));
 
-    return () => { unsubscribeMsgs(); unsubscribeTyping(); unsubscribeReads(); };
+    return () => { unsubscribeMsgs(); unsubscribeTyping(); unsubscribeReads(); unsubscribeReactions(); };
   }, [conversation.id, currentUser.id]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -154,6 +178,21 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       }, 2000);
   };
 
+  const onEmojiClick = (emojiData: EmojiClickData) => {
+    const cursor = textareaRef.current?.selectionStart || inputText.length;
+    const text = inputText.slice(0, cursor) + emojiData.emoji + inputText.slice(cursor);
+    setInputText(text);
+    
+    // Remettre le focus et replacer le curseur après l'émoji (petit délai nécessaire)
+    setTimeout(() => {
+        if(textareaRef.current) {
+            textareaRef.current.focus();
+            const newCursor = cursor + emojiData.emoji.length;
+            textareaRef.current.setSelectionRange(newCursor, newCursor);
+        }
+    }, 10);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -164,24 +203,26 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-        // --- VALIDATION CLIENT ---
+        // --- VALIDATION TYPE ---
         const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
         if (!validTypes.includes(file.type)) {
             alert("Format non supporté. Veuillez utiliser JPG, PNG, GIF ou WEBP.");
-            e.target.value = ''; 
+            e.target.value = ''; // Reset input
             return;
         }
 
-        if (file.size > 10 * 1024 * 1024) {
+        // --- VALIDATION TAILLE (10MB) ---
+        const maxSize = 10 * 1024 * 1024; // 10 Mo
+        if (file.size > maxSize) {
             alert("L'image est trop volumineuse. Taille maximum : 10 Mo.");
-            e.target.value = ''; 
+            e.target.value = ''; // Reset input
             return;
         }
 
         const previewUrl = URL.createObjectURL(file);
         setSelectedFile(file);
         setImagePreview(previewUrl);
-        e.target.value = ''; 
+        e.target.value = ''; // Reset pour permettre de re-sélectionner le même fichier si besoin
     }
   };
 
@@ -191,11 +232,23 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       setImagePreview(null);
   };
 
+  const handleReaction = async (msg: Message, emoji: string) => {
+      try {
+          // Optimistic update
+          // Note: Implementing complex optimistic updates for aggregation is tricky, 
+          // we rely on fast server response + socket here for simplicity or simple toggle.
+          await reactToMessageAPI(msg.id, emoji);
+      } catch (error) {
+          console.error("Reaction failed", error);
+      }
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!inputText.trim() && !selectedFile) || isSending) return;
     
     setIsSending(true);
+    setShowInputEmoji(false);
     
     if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
@@ -333,6 +386,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         onEdit={(m) => { setEditingMessage(m); setInputText(m.content); setReplyingTo(null); cancelImage(); }}
                         onDelete={async (m) => { if(window.confirm('Supprimer ?')) await deleteMessageAPI(m.id); }}
                         onReply={(m) => { setReplyingTo(m); setEditingMessage(null); textareaRef.current?.focus(); }}
+                        onReact={handleReaction}
                     />
                 ))
             )}
@@ -351,7 +405,27 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         </div>
 
         {/* Input Area */}
-        <div className="p-2 z-20 bg-transparent flex-shrink-0">
+        <div className="p-2 z-20 bg-transparent flex-shrink-0 relative">
+            <AnimatePresence>
+                {showInputEmoji && (
+                    <motion.div 
+                        ref={emojiPickerRef}
+                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                        className="absolute bottom-[80px] left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
+                    >
+                        <EmojiPicker 
+                            theme={Theme.AUTO}
+                            onEmojiClick={onEmojiClick}
+                            searchPlaceHolder="Rechercher..."
+                            width={320}
+                            height={400}
+                        />
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             <AnimatePresence>
                 {(editingMessage || replyingTo || imagePreview) && (
                     <motion.div 
@@ -390,7 +464,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             </AnimatePresence>
 
             <div className="flex items-end gap-2 px-2 pb-2">
-                <div className="flex-shrink-0 mb-1">
+                <div className="flex-shrink-0 mb-1 flex gap-2">
+                     <button 
+                        onClick={() => setShowInputEmoji(!showInputEmoji)}
+                        className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm
+                            ${showInputEmoji 
+                                ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' 
+                                : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}
+                        `}
+                     >
+                        <Smile size={24} />
+                     </button>
                     <button 
                         onClick={() => fileInputRef.current?.click()} 
                         className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm

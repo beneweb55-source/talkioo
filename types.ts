@@ -22,6 +22,13 @@ export interface Participant {
   last_deleted_at?: string | null; // For Soft Delete logic
 }
 
+export interface Reaction {
+  emoji: string;
+  user_id: string;
+  count?: number; // Calculé côté front
+  user_reacted?: boolean; // Calculé côté front
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
@@ -35,6 +42,7 @@ export interface Message {
   message_type?: 'text' | 'image' | 'video' | 'audio';
   attachment_url?: string;
   image_url?: string; // Fallback for backward compatibility
+  reactions?: Reaction[]; // New: List of reactions
   reply?: {
     id: string;
     content: string;

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Message } from '../../types';
-import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon } from 'lucide-react';
-import { motion } from 'framer-motion';
+import React, { useState, useRef, useEffect } from 'react';
+import { Message, Reaction } from '../../types';
+import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon, SmilePlus } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useAuth } from '../../context/AuthContext';
 
 interface MessageBubbleProps {
   message: Message;
@@ -9,7 +10,10 @@ interface MessageBubbleProps {
   onEdit?: (msg: Message) => void;
   onDelete?: (msg: Message) => void;
   onReply?: (msg: Message) => void;
+  onReact?: (msg: Message, emoji: string) => void;
 }
+
+const COMMON_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🎉', '🔥'];
 
 const renderContent = (text: string) => {
     if (!text) return null;
@@ -29,7 +33,8 @@ const renderContent = (text: string) => {
     });
 };
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, onEdit, onDelete, onReply }) => {
+export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, onEdit, onDelete, onReply, onReact }) => {
+  const { user } = useAuth();
   const isDeleted = !!message.deleted_at;
   const isEdited = !!message.updated_at && !isDeleted;
   const readCount = message.read_count || 0;
@@ -39,6 +44,18 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   const [translateX, setTranslateX] = useState(0);
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) {
+        setShowEmojiPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const onTouchStart = (e: React.TouchEvent) => setTouchStart(e.targetTouches[0].clientX);
   const onTouchMove = (e: React.TouchEvent) => {
@@ -61,6 +78,20 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   // On considère que c'est une image si URL présente OU si le type est déclaré 'image'
   const isImage = !!attachmentUrl || isLegacyBase64 || message.message_type === 'image';
 
+  // Agrégation des réactions
+  const reactionCounts: { [emoji: string]: { count: number, hasReacted: boolean } } = {};
+  if (message.reactions) {
+      message.reactions.forEach(r => {
+          if (!reactionCounts[r.emoji]) {
+              reactionCounts[r.emoji] = { count: 0, hasReacted: false };
+          }
+          reactionCounts[r.emoji].count += 1;
+          if (r.user_id === user?.id) {
+              reactionCounts[r.emoji].hasReacted = true;
+          }
+      });
+  }
+
   return (
     <motion.div 
         layout
@@ -80,12 +111,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         className="flex items-end gap-2 max-w-[85%] sm:max-w-[70%] transition-transform duration-200 z-10"
         style={{ transform: `translateX(${translateX}px)` }}
       >
+        {/* Actions Gauche (Reply) */}
         {onReply && !isDeleted && (
              <button onClick={() => onReply(message)} className={`opacity-0 group-hover:opacity-100 transition-all p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-400 ${isOwn ? 'order-first' : 'order-last'}`}>
                 <Reply size={14} />
              </button>
         )}
-
+        
+        {/* Actions Own (Edit/Delete) */}
         {isOwn && !isDeleted && !isImage && (
             <div className="opacity-0 group-hover:opacity-100 transition-all flex flex-col gap-1 mb-2 absolute top-0 -left-8">
                 {onEdit && <button onClick={() => onEdit(message)} className="p-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-white text-gray-500 rounded-full shadow-sm"><Pencil size={10} /></button>}
@@ -128,14 +161,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                       {isImage && (
                           <div className={`my-1 mb-2 relative w-full bg-gray-100 dark:bg-gray-800/50 rounded-lg overflow-hidden flex items-center justify-center min-h-[200px]`}>
                              
-                             {/* Loader Overlay: Affiche un loader tant que l'image n'est pas chargée OU si on attend l'URL */}
                              {!imgLoaded && !imgError && (
                                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-100/50 dark:bg-gray-800/50 backdrop-blur-[2px]">
                                     <Loader2 className="animate-spin text-brand-500" size={32} />
                                 </div>
                              )}
                              
-                             {/* Error State */}
                              {imgError ? (
                                 <div className="flex flex-col items-center justify-center text-red-500 gap-2 p-4 w-full h-full min-h-[200px] bg-red-50 dark:bg-red-900/10">
                                     <AlertTriangle size={24} />
@@ -155,7 +186,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                                     isLegacyBase64 ? (
                                         <img src={safeContent} alt="legacy" className="rounded-lg max-w-full" onLoad={() => setImgLoaded(true)} />
                                     ) : (
-                                        // Fallback UI si type=image mais pas d'URL (en cours de traitement ou erreur inattendue)
                                         <div className="flex flex-col items-center justify-center text-gray-400 gap-2 p-4 w-full min-h-[200px]">
                                             <ImageIcon size={32} className="opacity-50" />
                                             <span className="text-xs">Chargement de l'image...</span>
@@ -166,7 +196,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                           </div>
                       )}
                       
-                      {/* Affichage du texte s'il y en a (si ce n'est pas du legacy base64 qui est déjà géré au dessus) */}
                       {!isLegacyBase64 && renderContent(safeContent)}
                   </>
               )}
@@ -183,6 +212,54 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                     : <Check size={14} className="text-white/60" />
             )}
           </div>
+
+          {/* Reactions */}
+          {!isDeleted && (
+            <div className="flex flex-wrap gap-1 mt-2 -mb-5 relative z-20">
+              {Object.entries(reactionCounts).map(([emoji, { count, hasReacted }]) => (
+                <button
+                  key={emoji}
+                  onClick={(e) => { e.stopPropagation(); onReact?.(message, emoji); }}
+                  className={`
+                    px-1.5 py-0.5 rounded-full text-xs shadow-sm flex items-center gap-1 transition-transform hover:scale-105 border
+                    ${hasReacted 
+                        ? 'bg-brand-100 border-brand-200 text-brand-800 dark:bg-brand-900/50 dark:border-brand-800 dark:text-brand-100' 
+                        : 'bg-white border-gray-200 text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300'}
+                  `}
+                >
+                  <span>{emoji}</span>
+                  <span className="font-semibold text-[10px]">{count}</span>
+                </button>
+              ))}
+              
+              <div className="relative">
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setShowEmojiPicker(!showEmojiPicker); }}
+                    className="p-1 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 shadow-sm border border-gray-200 dark:border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <SmilePlus size={12} />
+                  </button>
+                  
+                  {showEmojiPicker && (
+                    <div 
+                        ref={pickerRef} 
+                        className={`absolute bottom-full mb-2 p-2 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 flex gap-1 z-50 ${isOwn ? 'right-0' : 'left-0'}`}
+                        style={{ minWidth: 'max-content' }}
+                    >
+                        {COMMON_EMOJIS.map(emoji => (
+                            <button
+                                key={emoji}
+                                onClick={(e) => { e.stopPropagation(); onReact?.(message, emoji); setShowEmojiPicker(false); }}
+                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-lg transition-colors"
+                            >
+                                {emoji}
+                            </button>
+                        ))}
+                    </div>
+                  )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </motion.div>

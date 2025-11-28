@@ -1,6 +1,5 @@
-
 import { io, Socket } from 'socket.io-client';
-import { User, Conversation, Message, AuthResponse, FriendRequest } from '../types';
+import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction } from '../types';
 
 // --- CONFIGURATION ---
 const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
@@ -165,6 +164,14 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
     }
 };
 
+// --- REACTIONS ---
+export const reactToMessageAPI = async (messageId: string, emoji: string): Promise<any> => {
+    return await fetchWithAuth(`/messages/${messageId}/react`, {
+        method: 'POST',
+        body: JSON.stringify({ emoji })
+    });
+};
+
 export const editMessageAPI = async (messageId: string, newContent: string): Promise<Message> => {
     return await fetchWithAuth(`/messages/${messageId}`, { method: 'PUT', body: JSON.stringify({ content: newContent }) });
 };
@@ -231,6 +238,15 @@ export const subscribeToMessages = (conversationId: string, onMessage: (msg: Mes
         socket.off('new_message', handler);
         socket.off('message_update', handler);
     };
+};
+
+export const subscribeToReactionUpdates = (conversationId: string, onUpdate: (messageId: string, reactions: Reaction[]) => void) => {
+    if (!socket) return () => {};
+    const handler = (data: { messageId: string, reactions: Reaction[] }) => {
+        onUpdate(data.messageId, data.reactions);
+    };
+    socket.on('message_reaction_update', handler);
+    return () => socket.off('message_reaction_update', handler);
 };
 
 export const subscribeToReadReceipts = (conversationId: string, onReadUpdate: () => void) => {

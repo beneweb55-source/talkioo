@@ -43,6 +43,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 })); 
 
+// Increase limit for JSON/UrlEncoded
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -259,18 +260,75 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- REACTIONS (PLACED BEFORE /messages GET) ---
+app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
+    const messageId = req.params.id;
+    const userId = req.user.id;
+    const { emoji } = req.body;
+    console.log(`[REACTION] User ${userId} reacting with ${emoji} to msg ${messageId}`);
+
+    try {
+        if (!emoji) return res.status(400).json({ error: "Emoji requis" });
+
+        // Check if message exists and user is part of conversation
+        const msgRes = await pool.query(`
+            SELECT m.conversation_id 
+            FROM messages m 
+            JOIN participants p ON p.conversation_id = m.conversation_id 
+            WHERE m.id = $1 AND p.user_id = $2
+        `, [messageId, userId]);
+
+        if (msgRes.rows.length === 0) {
+            return res.status(403).json({ error: "Message introuvable ou accès refusé" });
+        }
+
+        const conversationId = msgRes.rows[0].conversation_id;
+
+        // Toggle logic
+        const existingRes = await pool.query(
+            'SELECT * FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3',
+            [messageId, userId, emoji]
+        );
+
+        if (existingRes.rows.length > 0) {
+            await pool.query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [messageId, userId, emoji]);
+        } else {
+            await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)', [messageId, userId, emoji]);
+        }
+
+        const reactionsRes = await pool.query('SELECT emoji, user_id FROM message_reactions WHERE message_id = $1', [messageId]);
+        const reactions = reactionsRes.rows;
+
+        io.to(conversationId).emit('message_reaction_update', { messageId, reactions });
+        res.json({ success: true, reactions });
+
+    } catch (err) {
+        console.error("Reaction Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// MESSAGES GET
 app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT m.*, u.username, u.tag,
+            SELECT 
+                m.*, 
+                u.username, u.tag,
                 (SELECT COUNT(*) FROM message_reads mr WHERE mr.message_id = m.id AND mr.user_id != $2) AS read_count,
                 m2.content AS replied_to_content, u2.username AS replied_to_username, u2.tag AS replied_to_tag,
-                m2.message_type AS replied_to_type, m2.attachment_url AS replied_to_attachment_url
+                m2.message_type AS replied_to_type, m2.attachment_url AS replied_to_attachment_url,
+                (
+                    SELECT json_agg(json_build_object('emoji', mr.emoji, 'user_id', mr.user_id))
+                    FROM message_reactions mr
+                    WHERE mr.message_id = m.id
+                ) as reactions
             FROM messages m
             LEFT JOIN users u ON m.sender_id = u.id
             LEFT JOIN messages m2 ON m.replied_to_message_id = m2.id
             LEFT JOIN users u2 ON m2.sender_id = u2.id
-            WHERE m.conversation_id = $1 ORDER BY m.created_at ASC
+            WHERE m.conversation_id = $1 
+            ORDER BY m.created_at ASC
         `, [req.params.id, req.user.id]);
         
         const messages = result.rows.map(m => ({
@@ -283,23 +341,38 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
                 sender: m.replied_to_username ? `${m.replied_to_username}#${m.replied_to_tag}` : 'Inconnu',
                 message_type: m.replied_to_type,
                 attachment_url: m.replied_to_attachment_url
-            } : null
+            } : null,
+            reactions: m.reactions || []
         }));
         res.json(messages);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- IMAGE UPLOAD & MESSAGE SENDING ---
-app.post('/api/messages', authenticateToken, upload.single('media'), async (req, res) => {
+
+// Wrapper pour Multer afin de voir les erreurs
+const uploadMiddleware = upload.single('media');
+
+app.post('/api/messages', authenticateToken, (req, res, next) => {
+    uploadMiddleware(req, res, (err) => {
+        if (err) {
+            console.error('[MULTER DEBUG] Error:', err);
+            if (err instanceof multer.MulterError) {
+                return res.status(400).json({ error: `Multer Error: ${err.message}` });
+            }
+            return res.status(500).json({ error: `Upload Error: ${err.message}` });
+        }
+        next();
+    });
+}, async (req, res) => {
     console.log(`[DEBUG-RENDER] Route POST /api/messages atteinte`);
     const { conversation_id, replied_to_message_id } = req.body;
     const senderId = req.user.id;
     
     // Log request body and file status
-    console.log(`[DEBUG-RENDER] Request Body:`, JSON.stringify(req.body));
+    console.log(`[DEBUG-RENDER] Request Body Keys:`, Object.keys(req.body));
     console.log(`[DEBUG-RENDER] File present:`, !!req.file);
 
-    // SAFETY: FormData sends 'null' or 'undefined' as strings. Clean this up.
     let content = req.body.content;
     if (!content || content === 'undefined' || content === 'null') {
         content = '';
@@ -310,7 +383,7 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
 
     // --- LOGIQUE DE TÉLÉCHARGEMENT CLOUDINARY ---
     if (req.file) {
-        console.log(`[DEBUG-RENDER] Start Upload: ${req.file.originalname} (${req.file.size} bytes, MIME: ${req.file.mimetype})`);
+        console.log(`[DEBUG-RENDER] Start Upload: ${req.file.originalname} (${req.file.size} bytes)`);
         
         try {
             const uploadResult = await new Promise((resolve, reject) => {
@@ -321,11 +394,10 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
                     },
                     (error, result) => {
                         if (error) { 
-                            console.error("[DEBUG-RENDER] Cloudinary Callback Error:", JSON.stringify(error, null, 2)); 
+                            console.error("[DEBUG-RENDER] Cloudinary Callback Error:", error); 
                             reject(error); 
                         }
                         else { 
-                            console.log(`[DEBUG-RENDER] Cloudinary Callback Success: ${result.secure_url}`);
                             resolve(result); 
                         }
                     }
@@ -338,9 +410,8 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
             console.log(`[DEBUG-RENDER] Upload Final URL: ${attachmentUrl}`);
 
         } catch (error) {
-            // Enhanced logging for Render
-            console.error('[DEBUG-RENDER] ❌ ERROR CLOUDINARY UPLOAD:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-            return res.status(500).json({ error: "Échec de l'upload du média. Vérifiez les logs serveur [DEBUG-RENDER]." });
+            console.error('[DEBUG-RENDER] ❌ ERROR CLOUDINARY UPLOAD:', error);
+            return res.status(500).json({ error: "Échec de l'upload du média." });
         }
     }
 
@@ -357,7 +428,6 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
             [conversation_id, senderId, content, replied_to_message_id || null, messageType, attachmentUrl] 
         );
         const msg = result.rows[0];
-        console.log('[DEBUG-RENDER] SQL Insert Success. ID:', msg.id);
 
         // Marquer comme lu
         await pool.query('INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [msg.id, senderId]);
@@ -374,7 +444,6 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
              if (rRes.rows[0]) replyData = { id: msg.replied_to_message_id, content: rRes.rows[0].content, sender: `${rRes.rows[0].username}#${rRes.rows[0].tag}` };
         }
 
-        // Construction explicite de l'objet message pour le Socket.IO
         const fullMsg = { 
             id: msg.id,
             conversation_id: msg.conversation_id,
@@ -385,13 +454,12 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
             read_count: 0, 
             reply: replyData,
             message_type: messageType,
-            attachment_url: attachmentUrl, // Variable locale sûre
-            image_url: attachmentUrl // Fallback
+            attachment_url: attachmentUrl, 
+            image_url: attachmentUrl, 
+            reactions: []
         }; 
 
         console.log("[DEBUG-RENDER] Socket Broadcast:", fullMsg.attachment_url);
-
-        // Broadcast
         io.to(conversation_id).emit('new_message', fullMsg);
         
         const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversation_id]);

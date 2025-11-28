@@ -22,7 +22,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   // États pour la gestion d'image
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [isSending, setIsSending] = useState(false); // Pour le loading lors de l'envoi
+  const [isSending, setIsSending] = useState(false);
 
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
@@ -38,7 +38,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       });
   };
 
-  // Auto-resize Textarea
   useEffect(() => {
     if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
@@ -46,7 +45,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     }
   }, [inputText]);
 
-  // Keyboard detection
   useEffect(() => {
       if (window.visualViewport) {
           const handleResize = () => scrollToBottom('auto');
@@ -85,7 +83,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   useEffect(() => {
     setLoading(true);
     setTypingUsers(new Set());
-    // Reset image state on conversation change
     setSelectedFile(null);
     setImagePreview(null);
     
@@ -101,18 +98,29 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     fetchAndMark();
 
     const unsubscribeMsgs = subscribeToMessages(conversation.id, (newMessage) => {
+        console.log("SOCKET REÇU FRONTEND:", newMessage);
+        
+        if (newMessage.sender_id === currentUser.id) {
+            console.log("Message de l'expéditeur : URL présente ?", newMessage.attachment_url);
+        }
+
         setMessages(prev => {
-            // Éviter les doublons si on l'a déjà ajouté manuellement
+            // Si le message existe déjà (ajouté par l'API ou socket doublon), on met à jour
             const exists = prev.find(m => m.id === newMessage.id);
-            if (exists) return prev.map(m => m.id === newMessage.id ? newMessage : m);
+            if (exists) {
+                // On met à jour, mais si le socket message n'a pas d'URL et que l'existant en a une (bizarre), on pourrait vouloir garder l'existant.
+                // Mais avec le fix serveur, newMessage DEVRAIT avoir l'URL.
+                return prev.map(m => m.id === newMessage.id ? newMessage : m);
+            }
+            
+            // Si on reçoit le vrai message alors qu'on a un temporaire, on check pas ici
+            // C'est géré dans handleSendMessage généralement, mais pour être sûr :
             return [...prev, newMessage];
         });
         
-        // Si c'est un nouveau message (pas une update), on scroll
-        if (!messages.find(m => m.id === newMessage.id)) {
-            scrollToBottom('smooth');
-            if (newMessage.sender_id !== currentUser.id) markMessagesAsReadAPI(conversation.id);
-        }
+        // Scroll seulement si c'est nouveau
+        scrollToBottom('smooth');
+        if (newMessage.sender_id !== currentUser.id) markMessagesAsReadAPI(conversation.id);
     });
 
     const unsubscribeTyping = subscribeToTypingEvents(conversation.id, (userId, isTyping) => {
@@ -146,21 +154,30 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     }
   };
 
-  // 1. SÉLECTION DE L'IMAGE (Prévisualisation seulement)
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-        if (file.size > 10 * 1024 * 1024) {
-            alert("Image trop volumineuse (Max 10Mo)");
+        // --- VALIDATION CLIENT ---
+        
+        // 1. Vérification du type de fichier
+        const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!validTypes.includes(file.type)) {
+            alert("Format non supporté. Veuillez utiliser JPG, PNG, GIF ou WEBP.");
+            e.target.value = ''; // Réinitialiser l'input
             return;
         }
-        // Créer une URL locale pour la prévisualisation immédiate
+
+        // 2. Vérification de la taille (Max 10Mo)
+        if (file.size > 10 * 1024 * 1024) {
+            alert("L'image est trop volumineuse. Taille maximum : 10 Mo.");
+            e.target.value = ''; // Réinitialiser l'input
+            return;
+        }
+
         const previewUrl = URL.createObjectURL(file);
         setSelectedFile(file);
         setImagePreview(previewUrl);
-        
-        // Reset l'input pour pouvoir resélectionner le même fichier si on l'annule puis le remet
-        e.target.value = '';
+        e.target.value = ''; // Reset input to allow re-selection of same file
     }
   };
 
@@ -170,12 +187,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       setImagePreview(null);
   };
 
-  // 2. ENVOI DU MESSAGE (Texte ou Image)
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!inputText.trim() && !selectedFile) || isSending) return;
     
-    setIsSending(true); // Bloquer le bouton
+    setIsSending(true);
     
     if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
@@ -183,12 +199,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         sendStopTypingEvent(conversation.id);
     }
 
-    // Sauvegarde des états actuels en cas d'erreur
     const textToSend = inputText;
     const fileToSend = selectedFile; 
-    const currentPreview = imagePreview;
+    const currentPreview = imagePreview; // Garder la ref pour l'UI optimiste
 
-    // Reset UI immédiat (Optimiste)
+    // Reset UI immédiat
     setInputText('');
     setSelectedFile(null);
     setImagePreview(null);
@@ -198,13 +213,31 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         textareaRef.current.focus();
     }
 
+    // UI OPTIMISTE : Créer un message temporaire avec l'URL locale (Blob)
+    const tempId = 'temp_' + Date.now();
+    const optimisticMsg: Message = {
+        id: tempId,
+        conversation_id: conversation.id,
+        sender_id: currentUser.id,
+        content: textToSend,
+        created_at: new Date().toISOString(),
+        sender_username: currentUser.username,
+        message_type: fileToSend ? 'image' : 'text',
+        attachment_url: currentPreview || undefined, 
+        read_count: 0
+    };
+
+    if (!editingMessage) {
+        setMessages(prev => [...prev, optimisticMsg]);
+        scrollToBottom('smooth');
+    }
+
     try {
         if (editingMessage && !fileToSend) {
-            // Mode Édition (Texte seulement)
             await editMessageAPI(editingMessage.id, textToSend);
             setEditingMessage(null);
         } else {
-            // Mode Envoi (Nouveau message)
+            // Envoi réel API
             const newMessage = await sendMessageAPI(
                 conversation.id, 
                 currentUser.id, 
@@ -214,20 +247,26 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 fileToSend || undefined
             );
 
-            // CORRECTION: Ajouter immédiatement le message retourné par l'API à la liste
-            // Cela garantit l'affichage même si le socket est lent
+            // LOGIQUE DE DÉDUPLICATION ET REMPLACEMENT
             setMessages(prev => {
-                // On vérifie si le socket l'a déjà ajouté entre temps
-                if (prev.find(m => m.id === newMessage.id)) return prev;
-                return [...prev, newMessage];
+                // Vérifier si le message réel a déjà été ajouté par le Socket (course condition)
+                const alreadyExists = prev.find(m => m.id === newMessage.id);
+                
+                if (alreadyExists) {
+                    // Si le vrai existe déjà, on retire juste le temporaire
+                    return prev.filter(m => m.id !== tempId);
+                }
+                
+                // Sinon, on remplace le temporaire par le vrai
+                return prev.map(m => m.id === tempId ? newMessage : m);
             });
-            scrollToBottom('smooth');
         }
     } catch (err: any) {
         console.error("Erreur envoi:", err);
         alert(`Erreur d'envoi: ${err.message || "Erreur inconnue"}`);
         
-        // Restauration de l'état en cas d'erreur
+        // Rollback : Retirer le message optimiste et restaurer l'input en cas d'erreur
+        setMessages(prev => prev.filter(m => m.id !== tempId));
         setInputText(textToSend);
         if (fileToSend) {
             setSelectedFile(fileToSend);
@@ -239,7 +278,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   };
 
   const isOnline = otherUserId && onlineUsers.has(otherUserId);
-  // Le bouton envoyer est actif s'il y a du texte OU un fichier
   const canSend = (inputText.trim().length > 0 || selectedFile !== null) && !isSending;
 
   return (
@@ -304,7 +342,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
         {/* Input Area */}
         <div className="p-2 z-20 bg-transparent flex-shrink-0">
-            {/* Context Header (Reply/Edit/Image Preview) */}
             <AnimatePresence>
                 {(editingMessage || replyingTo || imagePreview) && (
                     <motion.div 
@@ -314,7 +351,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         className="mx-2 px-4 py-2 border-l-4 border-brand-500 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-r-lg shadow-sm flex justify-between items-center overflow-hidden"
                     >
                         <div className="flex items-center gap-3 overflow-hidden">
-                            {/* Image Preview Thumbnail */}
                             {imagePreview && (
                                 <div className="h-12 w-12 rounded-lg bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0 relative">
                                     <img src={imagePreview} alt="Preview" className="h-full w-full object-cover" />
@@ -343,10 +379,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 )}
             </AnimatePresence>
 
-            {/* Bottom Bar Container */}
             <div className="flex items-end gap-2 px-2 pb-2">
-                
-                {/* Image/Attachment Button */}
                 <div className="flex-shrink-0 mb-1">
                     <button 
                         onClick={() => fileInputRef.current?.click()} 
@@ -363,12 +396,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         type="file" 
                         ref={fileInputRef} 
                         className="hidden" 
-                        accept="image/*" 
+                        accept="image/jpeg,image/png,image/gif,image/webp" 
                         onChange={handleImageSelect}
                     />
                 </div>
 
-                {/* Text Input Container */}
                 <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-gray-200 dark:border-gray-800 flex items-end overflow-hidden min-h-[50px]">
                     <textarea
                         ref={textareaRef}
@@ -383,7 +415,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     />
                 </div>
 
-                {/* Send Button */}
                 <motion.button 
                     whileHover={{ scale: canSend ? 1.05 : 1 }}
                     whileTap={{ scale: canSend ? 0.95 : 1 }}

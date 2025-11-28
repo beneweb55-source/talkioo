@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Message } from '../../types';
-import { Check, CheckCheck, Pencil, Trash2, Reply, ImageIcon, AlertTriangle, Loader2 } from 'lucide-react';
+import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface MessageBubbleProps {
@@ -14,15 +14,6 @@ interface MessageBubbleProps {
 const renderContent = (text: string) => {
     if (!text) return null;
     
-    // Legacy Check if it's a Base64 Image (Fallback)
-    if (text.startsWith('data:image')) {
-        return (
-            <div className="my-1">
-                <img src={text} alt="envoyé" className="rounded-lg max-w-full max-h-[300px] object-cover border border-black/10 dark:border-white/10" />
-            </div>
-        );
-    }
-
     const parts = text.split(/((?:https?:\/\/|www\.)[^\s]+)/g);
     return parts.map((part, i) => {
         if (part.match(/^(https?:\/\/|www\.)/)) {
@@ -60,11 +51,15 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       setTranslateX(0); setTouchStart(null);
   };
 
-  // Safe access to content to prevent crash on NULL values from DB
+  // Sécurisation du contenu texte
   const safeContent = message.content || "";
-  const isBase64Image = safeContent.startsWith('data:image');
-  const hasAttachment = !!message.attachment_url;
-  const isImage = isBase64Image || hasAttachment;
+  
+  // Détection du type de message : On vérifie attachment_url ET le fallback image_url
+  const attachmentUrl = message.attachment_url || message.image_url;
+  const isLegacyBase64 = safeContent.startsWith('data:image');
+  
+  // On considère que c'est une image si URL présente OU si le type est déclaré 'image'
+  const isImage = !!attachmentUrl || isLegacyBase64 || message.message_type === 'image';
 
   return (
     <motion.div 
@@ -74,7 +69,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         className={`flex w-full mb-3 ${isOwn ? 'justify-end' : 'justify-start'} group relative`}
         onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
     >
-      {/* Swipe Indicator */}
       <motion.div 
         className="absolute left-0 top-1/2 -translate-y-1/2 text-brand-500 bg-brand-50 dark:bg-brand-900/30 p-2 rounded-full z-0 opacity-0" 
         animate={{ x: translateX > 40 ? 10 : 0, opacity: translateX > 10 ? 1 : 0 }}
@@ -86,14 +80,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         className="flex items-end gap-2 max-w-[85%] sm:max-w-[70%] transition-transform duration-200 z-10"
         style={{ transform: `translateX(${translateX}px)` }}
       >
-        {/* PC Reply Button */}
         {onReply && !isDeleted && (
              <button onClick={() => onReply(message)} className={`opacity-0 group-hover:opacity-100 transition-all p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-400 ${isOwn ? 'order-first' : 'order-last'}`}>
                 <Reply size={14} />
              </button>
         )}
 
-        {/* Action Menu */}
         {isOwn && !isDeleted && !isImage && (
             <div className="opacity-0 group-hover:opacity-100 transition-all flex flex-col gap-1 mb-2 absolute top-0 -left-8">
                 {onEdit && <button onClick={() => onEdit(message)} className="p-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-white text-gray-500 rounded-full shadow-sm"><Pencil size={10} /></button>}
@@ -133,37 +125,49 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   <span className="flex items-center gap-1.5 text-sm opacity-80"><Trash2 size={12}/> Message supprimé</span>
               ) : (
                   <>
-                      {/* Render Attachment Image if present */}
-                      {message.attachment_url && (
-                          <div className="my-1 mb-2 relative min-h-[50px] min-w-[50px]">
-                             {/* Placeholder during load */}
+                      {isImage && (
+                          <div className={`my-1 mb-2 relative w-full bg-gray-100 dark:bg-gray-800/50 rounded-lg overflow-hidden flex items-center justify-center min-h-[200px]`}>
+                             
+                             {/* Loader Overlay: Affiche un loader tant que l'image n'est pas chargée OU si on attend l'URL */}
                              {!imgLoaded && !imgError && (
-                                <div className="absolute inset-0 bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-center z-0">
-                                    <Loader2 className="animate-spin text-brand-500" size={24} />
+                                <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-100/50 dark:bg-gray-800/50 backdrop-blur-[2px]">
+                                    <Loader2 className="animate-spin text-brand-500" size={32} />
                                 </div>
                              )}
                              
                              {/* Error State */}
                              {imgError ? (
-                                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 flex flex-col items-center justify-center text-red-500 gap-1 min-h-[100px] w-full">
-                                    <AlertTriangle size={20} />
-                                    <span className="text-xs font-medium">Erreur chargement</span>
+                                <div className="flex flex-col items-center justify-center text-red-500 gap-2 p-4 w-full h-full min-h-[200px] bg-red-50 dark:bg-red-900/10">
+                                    <AlertTriangle size={24} />
+                                    <span className="text-xs font-medium">Image non disponible</span>
                                 </div>
                              ) : (
-                                <img 
-                                    src={message.attachment_url} 
-                                    alt="Image envoyée" 
-                                    className="relative z-10 rounded-lg max-w-full max-h-[300px] object-cover border border-black/10 dark:border-white/10 cursor-pointer"
-                                    onClick={() => window.open(message.attachment_url, '_blank')}
-                                    onLoad={() => setImgLoaded(true)}
-                                    onError={() => { setImgError(true); setImgLoaded(true); }}
-                                />
+                                attachmentUrl ? (
+                                    <img 
+                                        src={attachmentUrl} 
+                                        alt="Image envoyée" 
+                                        className="relative z-10 w-full h-auto max-h-[400px] object-cover rounded-lg cursor-pointer min-h-[200px] block"
+                                        onClick={() => window.open(attachmentUrl, '_blank')}
+                                        onLoad={() => setImgLoaded(true)}
+                                        onError={() => { setImgError(true); setImgLoaded(true); }}
+                                    />
+                                ) : (
+                                    isLegacyBase64 ? (
+                                        <img src={safeContent} alt="legacy" className="rounded-lg max-w-full" onLoad={() => setImgLoaded(true)} />
+                                    ) : (
+                                        // Fallback UI si type=image mais pas d'URL (en cours de traitement ou erreur inattendue)
+                                        <div className="flex flex-col items-center justify-center text-gray-400 gap-2 p-4 w-full min-h-[200px]">
+                                            <ImageIcon size={32} className="opacity-50" />
+                                            <span className="text-xs">Chargement de l'image...</span>
+                                        </div>
+                                    )
+                                )
                              )}
                           </div>
                       )}
                       
-                      {/* Render Text Content if present */}
-                      {renderContent(safeContent)}
+                      {/* Affichage du texte s'il y en a (si ce n'est pas du legacy base64 qui est déjà géré au dessus) */}
+                      {!isLegacyBase64 && renderContent(safeContent)}
                   </>
               )}
           </div>

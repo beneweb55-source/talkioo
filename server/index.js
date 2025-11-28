@@ -15,7 +15,6 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = 'super_secret_key_change_this_in_prod';
 
 // Configuration Cloudinary
-// CORRECTION : La clé secrète ne doit pas contenir @dz8b5k9wp
 cloudinary.config({
   cloud_name: 'dz8b5k9wp',
   api_key: '338861446288879',
@@ -54,8 +53,7 @@ const io = new Server(server, {
 
 io.on('connection', async (socket) => {
     const userId = socket.handshake.query.userId;
-    console.log('User connected:', socket.id, 'User ID:', userId);
-
+    
     if (userId) {
         try {
             await pool.query('UPDATE users SET is_online = TRUE, socket_id = $1 WHERE id = $2', [socket.id, userId]);
@@ -296,9 +294,9 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
     const { conversation_id, replied_to_message_id } = req.body;
     const senderId = req.user.id;
     
-    // Safety check for content (ensure it's not null/undefined)
+    // SAFETY: FormData sends 'null' or 'undefined' as strings. Clean this up.
     let content = req.body.content;
-    if (content === undefined || content === null || content === 'undefined' || content === 'null') {
+    if (!content || content === 'undefined' || content === 'null') {
         content = '';
     }
 
@@ -307,7 +305,7 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
 
     // --- LOGIQUE DE TÉLÉCHARGEMENT CLOUDINARY ---
     if (req.file) {
-        console.log(`[Upload] Fichier reçu: ${req.file.originalname} (${req.file.size} bytes)`);
+        console.log(`[Upload] Start: ${req.file.originalname} (${req.file.size} bytes)`);
         try {
             const uploadResult = await new Promise((resolve, reject) => {
                 const uploadStream = cloudinary.uploader.upload_stream(
@@ -316,7 +314,7 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
                         resource_type: "auto"
                     },
                     (error, result) => {
-                        if (error) { console.error("[Cloudinary] Erreur API:", error); reject(error); }
+                        if (error) { console.error("[Upload] Cloudinary Error:", error); reject(error); }
                         else resolve(result);
                     }
                 );
@@ -325,17 +323,17 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
 
             attachmentUrl = uploadResult.secure_url;
             messageType = 'image';
-            console.log(`[Upload] Succès: ${attachmentUrl}`);
+            console.log(`[Upload] Success: ${attachmentUrl}`);
 
         } catch (error) {
-            console.error('[Upload] Échec critique:', error);
-            return res.status(500).json({ error: "Échec de l'upload du média." });
+            console.error('[Upload] Critical Fail:', error);
+            return res.status(500).json({ error: "Échec de l'upload du média. Vérifiez les logs serveur." });
         }
     }
 
     // Validation
     if (!attachmentUrl && content.trim() === '') {
-         return res.status(400).json({ error: 'Message vide.' });
+         return res.status(400).json({ error: 'Message vide (ni texte ni image).' });
     }
 
     try {
@@ -360,12 +358,24 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
              if (rRes.rows[0]) replyData = { id: msg.replied_to_message_id, content: rRes.rows[0].content, sender: `${rRes.rows[0].username}#${rRes.rows[0].tag}` };
         }
 
+        // --- CORRECTION CRITIQUE ---
+        // Construction explicite de l'objet message pour le Socket.IO
+        // On force l'utilisation de la variable 'attachmentUrl' locale
         const fullMsg = { 
-            ...msg, 
+            id: msg.id,
+            conversation_id: msg.conversation_id,
+            sender_id: msg.sender_id,
+            content: msg.content === null ? "" : msg.content,
+            created_at: msg.created_at,
             sender_username: `${sender.username}#${sender.tag}`, 
             read_count: 0, 
-            reply: replyData 
+            reply: replyData,
+            message_type: messageType,
+            attachment_url: attachmentUrl, // Variable locale sûre
+            image_url: attachmentUrl // Fallback
         }; 
+
+        console.log("DEBUG SOCKET: Envoi du message avec URL :", fullMsg.attachment_url);
 
         // Broadcast
         io.to(conversation_id).emit('new_message', fullMsg);

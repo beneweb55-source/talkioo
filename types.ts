@@ -34,6 +34,7 @@ export interface Message {
   read_count?: number;
   message_type?: 'text' | 'image' | 'video' | 'audio';
   attachment_url?: string;
+  image_url?: string; // Fallback for backward compatibility
   reply?: {
     id: string;
     content: string;

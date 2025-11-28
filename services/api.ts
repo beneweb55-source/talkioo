@@ -1,18 +1,14 @@
+
 import { io, Socket } from 'socket.io-client';
 import { User, Conversation, Message, AuthResponse, FriendRequest } from '../types';
 
 // --- CONFIGURATION ---
-// Detect if we are running locally to switch between Localhost and Render
 const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-// CORRECTION MAJEURE : 
-// En local, on utilise une chaine vide '' pour que les requêtes soient relatives (ex: /api/messages).
-// Cela permet à Vite (vite.config.ts) d'intercepter la requête et de la rediriger vers le port 3001 via le Proxy.
-// Cela règle les problèmes de CORS et de "Impossible de joindre le serveur".
+// En local, on utilise une chaine vide '' pour utiliser le proxy Vite
 const API_BASE = isLocal ? '' : 'https://talkioo.onrender.com';
 const API_URL = `${API_BASE}/api`;
 
-console.log(`[Talkio] Environment: ${isLocal ? 'Local (via Proxy)' : 'Production'}`);
 console.log(`[Talkio] API Target: ${API_URL}`);
 
 // --- SOCKET INSTANCE ---
@@ -21,7 +17,7 @@ let socket: Socket;
 export const connectSocket = (token: string, userId: string) => {
     if (socket && socket.connected) return;
     
-    // Pour le socket, en local on doit viser le port 3001 explicitement car le proxy WebSocket de Vite peut être capricieux
+    // Le socket local doit viser le port 3001 directement
     const SOCKET_URL = isLocal ? 'http://localhost:3001' : 'https://talkioo.onrender.com';
 
     socket = io(SOCKET_URL, {
@@ -53,7 +49,6 @@ const fetchWithAuth = async (endpoint: string, options: RequestInit = {}) => {
     const headers: HeadersInit = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
     
-    // Si ce n'est pas du FormData, on définit JSON
     if (!(options.body instanceof FormData)) {
         headers['Content-Type'] = 'application/json';
     }
@@ -136,20 +131,21 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
 export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image' = 'text', file?: File): Promise<Message> => {
     
     if (file) {
+        // Validation Size (Double check client-side)
         if (file.size > 10 * 1024 * 1024) throw new Error("Image trop volumineuse (Max 10Mo)");
         
         const formData = new FormData();
         
-        // Bonne pratique : Ajouter les champs texte AVANT le fichier pour aider le parseur côté serveur
         formData.append('conversation_id', conversationId);
         
-        // On s'assure que le contenu est une chaîne vide valide et non null/undefined
-        const safeContent = (content === null || content === undefined) ? "" : String(content);
+        // CORRECTION : Force explicit empty string if content is missing.
+        // This prevents 'null' string conversion issues on the backend.
+        const safeContent = (content && content !== 'undefined' && content !== 'null') ? String(content) : "";
         formData.append('content', safeContent);
         
         if (repliedToId) formData.append('replied_to_message_id', repliedToId);
         
-        // Le fichier en dernier
+        // Append file last
         formData.append('media', file);
         
         return await fetchWithAuth('/messages', { 
@@ -208,7 +204,6 @@ export const subscribeToPushAPI = async (subscription: PushSubscription): Promis
     });
 };
 
-
 // --- TYPING EVENTS ---
 export const sendTypingEvent = (conversationId: string) => {
     if(socket) socket.emit('typing_start', { conversationId });
@@ -240,24 +235,17 @@ export const subscribeToMessages = (conversationId: string, onMessage: (msg: Mes
 
 export const subscribeToReadReceipts = (conversationId: string, onReadUpdate: () => void) => {
     if (!socket) return () => {};
-    
     const handler = (data: { conversationId: string }) => {
-        if (data.conversationId === conversationId) {
-            onReadUpdate();
-        }
+        if (data.conversationId === conversationId) onReadUpdate();
     };
-    
     socket.on('READ_RECEIPT_UPDATE', handler);
     return () => socket.off('READ_RECEIPT_UPDATE', handler);
 };
 
 export const subscribeToTypingEvents = (conversationId: string, onTyping: (userId: string, isTyping: boolean) => void) => {
     if (!socket) return () => {};
-    
     const handler = (data: { conversationId: string, userId: string, isTyping: boolean }) => {
-        if (data.conversationId === conversationId) {
-            onTyping(data.userId, data.isTyping);
-        }
+        if (data.conversationId === conversationId) onTyping(data.userId, data.isTyping);
     };
     socket.on('typing_update', handler);
     return () => socket.off('typing_update', handler);
@@ -281,16 +269,10 @@ export const subscribeToFriendRequests = (userId: string, onNewRequest: () => vo
 
 export const subscribeToConversationsList = (onUpdate: () => void) => {
     if (!socket) return () => {};
-
-    const handler = (data: any) => {
-        console.log("List Update Event:", data);
-        onUpdate();
-    };
-    
+    const handler = () => onUpdate();
     socket.on('conversation_added', handler);
     socket.on('conversation_updated', handler);
-    socket.on('request_accepted', handler); 
-    
+    socket.on('request_accepted', handler);
     return () => {
         socket.off('conversation_added', handler);
         socket.off('conversation_updated', handler);

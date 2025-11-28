@@ -101,11 +101,15 @@ export const getOnlineUsersAPI = async (): Promise<string[]> => {
 };
 
 // --- PROFILE ---
-export const updateProfile = async (data: { username?: string; email?: string }): Promise<User> => {
+export const updateProfileAPI = async (data: { username?: string; email?: string }): Promise<User> => {
     return await fetchWithAuth('/users/profile', { method: 'PUT', body: JSON.stringify(data) });
 };
 
-export const updateAvatar = async (file: File): Promise<{ avatarUrl: string }> => {
+export const updatePasswordAPI = async (data: { oldPassword: string, newPassword: string }): Promise<void> => {
+    return await fetchWithAuth('/users/password', { method: 'PUT', body: JSON.stringify(data) });
+};
+
+export const updateAvatarAPI = async (file: File): Promise<{ avatarUrl: string }> => {
     const formData = new FormData();
     formData.append('avatar', file);
     return await fetchWithAuth('/users/avatar', { method: 'POST', body: formData });

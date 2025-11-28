@@ -98,27 +98,34 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     fetchAndMark();
 
     const unsubscribeMsgs = subscribeToMessages(conversation.id, (newMessage) => {
-        console.log("SOCKET REÇU FRONTEND:", newMessage);
+        console.log("[FRONTEND SOCKET] REÇU:", newMessage);
         
         if (newMessage.sender_id === currentUser.id) {
-            console.log("Message de l'expéditeur : URL présente ?", newMessage.attachment_url);
+            console.log("[FRONTEND SOCKET] URL présente ?", newMessage.attachment_url);
         }
 
         setMessages(prev => {
             // Si le message existe déjà (ajouté par l'API ou socket doublon), on met à jour
             const exists = prev.find(m => m.id === newMessage.id);
             if (exists) {
-                // On met à jour, mais si le socket message n'a pas d'URL et que l'existant en a une (bizarre), on pourrait vouloir garder l'existant.
-                // Mais avec le fix serveur, newMessage DEVRAIT avoir l'URL.
+                // PROTECTION CRITIQUE : Si le message existant a une URL mais que le nouveau (socket) n'en a pas
+                // (ce qui peut arriver si le socket est broadcasté avant que l'URL ne soit persistée),
+                // on garde l'ancienne URL pour éviter la disparition de l'image.
+                if (exists.attachment_url && !newMessage.attachment_url) {
+                    console.warn("[FRONTEND] Conservation de l'URL existante pour éviter écrasement par Socket vide");
+                    return prev.map(m => m.id === newMessage.id ? { 
+                        ...newMessage, 
+                        attachment_url: exists.attachment_url,
+                        image_url: exists.attachment_url // Fallback
+                    } : m);
+                }
+                
                 return prev.map(m => m.id === newMessage.id ? newMessage : m);
             }
             
-            // Si on reçoit le vrai message alors qu'on a un temporaire, on check pas ici
-            // C'est géré dans handleSendMessage généralement, mais pour être sûr :
             return [...prev, newMessage];
         });
         
-        // Scroll seulement si c'est nouveau
         scrollToBottom('smooth');
         if (newMessage.sender_id !== currentUser.id) markMessagesAsReadAPI(conversation.id);
     });
@@ -158,26 +165,23 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     const file = e.target.files?.[0];
     if (file) {
         // --- VALIDATION CLIENT ---
-        
-        // 1. Vérification du type de fichier
         const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
         if (!validTypes.includes(file.type)) {
             alert("Format non supporté. Veuillez utiliser JPG, PNG, GIF ou WEBP.");
-            e.target.value = ''; // Réinitialiser l'input
+            e.target.value = ''; 
             return;
         }
 
-        // 2. Vérification de la taille (Max 10Mo)
         if (file.size > 10 * 1024 * 1024) {
             alert("L'image est trop volumineuse. Taille maximum : 10 Mo.");
-            e.target.value = ''; // Réinitialiser l'input
+            e.target.value = ''; 
             return;
         }
 
         const previewUrl = URL.createObjectURL(file);
         setSelectedFile(file);
         setImagePreview(previewUrl);
-        e.target.value = ''; // Reset input to allow re-selection of same file
+        e.target.value = ''; 
     }
   };
 
@@ -201,7 +205,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
     const textToSend = inputText;
     const fileToSend = selectedFile; 
-    const currentPreview = imagePreview; // Garder la ref pour l'UI optimiste
+    const currentPreview = imagePreview; 
 
     // Reset UI immédiat
     setInputText('');
@@ -213,7 +217,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         textareaRef.current.focus();
     }
 
-    // UI OPTIMISTE : Créer un message temporaire avec l'URL locale (Blob)
+    // UI OPTIMISTE
     const tempId = 'temp_' + Date.now();
     const optimisticMsg: Message = {
         id: tempId,
@@ -253,7 +257,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 const alreadyExists = prev.find(m => m.id === newMessage.id);
                 
                 if (alreadyExists) {
-                    // Si le vrai existe déjà, on retire juste le temporaire
+                    // Si le message existe déjà via Socket, on vérifie s'il a bien l'URL
+                    if (!alreadyExists.attachment_url && newMessage.attachment_url) {
+                         // Le socket a mis un message vide ? On force la mise à jour avec la réponse API
+                         console.warn("[FRONTEND] Correction du message Socket incomplet via réponse API");
+                         return prev.map(m => m.id === newMessage.id ? newMessage : m).filter(m => m.id !== tempId);
+                    }
+                    // Sinon on retire juste le temporaire
                     return prev.filter(m => m.id !== tempId);
                 }
                 
@@ -265,7 +275,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         console.error("Erreur envoi:", err);
         alert(`Erreur d'envoi: ${err.message || "Erreur inconnue"}`);
         
-        // Rollback : Retirer le message optimiste et restaurer l'input en cas d'erreur
+        // Rollback
         setMessages(prev => prev.filter(m => m.id !== tempId));
         setInputText(textToSend);
         if (fileToSend) {

@@ -291,9 +291,14 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
 
 // --- IMAGE UPLOAD & MESSAGE SENDING ---
 app.post('/api/messages', authenticateToken, upload.single('media'), async (req, res) => {
+    console.log(`[DEBUG-RENDER] Route POST /api/messages atteinte`);
     const { conversation_id, replied_to_message_id } = req.body;
     const senderId = req.user.id;
     
+    // Log request body and file status
+    console.log(`[DEBUG-RENDER] Request Body:`, JSON.stringify(req.body));
+    console.log(`[DEBUG-RENDER] File present:`, !!req.file);
+
     // SAFETY: FormData sends 'null' or 'undefined' as strings. Clean this up.
     let content = req.body.content;
     if (!content || content === 'undefined' || content === 'null') {
@@ -305,7 +310,8 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
 
     // --- LOGIQUE DE TÉLÉCHARGEMENT CLOUDINARY ---
     if (req.file) {
-        console.log(`[Upload] Start: ${req.file.originalname} (${req.file.size} bytes)`);
+        console.log(`[DEBUG-RENDER] Start Upload: ${req.file.originalname} (${req.file.size} bytes, MIME: ${req.file.mimetype})`);
+        
         try {
             const uploadResult = await new Promise((resolve, reject) => {
                 const uploadStream = cloudinary.uploader.upload_stream(
@@ -314,8 +320,14 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
                         resource_type: "auto"
                     },
                     (error, result) => {
-                        if (error) { console.error("[Upload] Cloudinary Error:", error); reject(error); }
-                        else resolve(result);
+                        if (error) { 
+                            console.error("[DEBUG-RENDER] Cloudinary Callback Error:", JSON.stringify(error, null, 2)); 
+                            reject(error); 
+                        }
+                        else { 
+                            console.log(`[DEBUG-RENDER] Cloudinary Callback Success: ${result.secure_url}`);
+                            resolve(result); 
+                        }
                     }
                 );
                 uploadStream.end(req.file.buffer);
@@ -323,25 +335,29 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
 
             attachmentUrl = uploadResult.secure_url;
             messageType = 'image';
-            console.log(`[Upload] Success: ${attachmentUrl}`);
+            console.log(`[DEBUG-RENDER] Upload Final URL: ${attachmentUrl}`);
 
         } catch (error) {
-            console.error('[Upload] Critical Fail:', error);
-            return res.status(500).json({ error: "Échec de l'upload du média. Vérifiez les logs serveur." });
+            // Enhanced logging for Render
+            console.error('[DEBUG-RENDER] ❌ ERROR CLOUDINARY UPLOAD:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            return res.status(500).json({ error: "Échec de l'upload du média. Vérifiez les logs serveur [DEBUG-RENDER]." });
         }
     }
 
     // Validation
     if (!attachmentUrl && content.trim() === '') {
+         console.log('[DEBUG-RENDER] Erreur: Message vide');
          return res.status(400).json({ error: 'Message vide (ni texte ni image).' });
     }
 
     try {
+        console.log('[DEBUG-RENDER] Insertion SQL en cours...');
         const result = await pool.query(
             'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id, message_type, attachment_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
             [conversation_id, senderId, content, replied_to_message_id || null, messageType, attachmentUrl] 
         );
         const msg = result.rows[0];
+        console.log('[DEBUG-RENDER] SQL Insert Success. ID:', msg.id);
 
         // Marquer comme lu
         await pool.query('INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [msg.id, senderId]);
@@ -358,9 +374,7 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
              if (rRes.rows[0]) replyData = { id: msg.replied_to_message_id, content: rRes.rows[0].content, sender: `${rRes.rows[0].username}#${rRes.rows[0].tag}` };
         }
 
-        // --- CORRECTION CRITIQUE ---
         // Construction explicite de l'objet message pour le Socket.IO
-        // On force l'utilisation de la variable 'attachmentUrl' locale
         const fullMsg = { 
             id: msg.id,
             conversation_id: msg.conversation_id,
@@ -375,7 +389,7 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
             image_url: attachmentUrl // Fallback
         }; 
 
-        console.log("DEBUG SOCKET: Envoi du message avec URL :", fullMsg.attachment_url);
+        console.log("[DEBUG-RENDER] Socket Broadcast:", fullMsg.attachment_url);
 
         // Broadcast
         io.to(conversation_id).emit('new_message', fullMsg);
@@ -385,7 +399,7 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
         
         res.json(fullMsg);
     } catch (err) {
-        console.error("SQL Insert Error:", err);
+        console.error("[DEBUG-RENDER] SQL/Logic Error:", err);
         res.status(500).json({ error: err.message });
     }
 });

@@ -14,11 +14,11 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = 'super_secret_key_change_this_in_prod';
 
-// Configuration Cloudinary
+// Configuration Cloudinary (Lecture depuis les variables d'environnement Render)
 cloudinary.config({
-  cloud_name: 'dz8b5k9wp',
-  api_key: '338861446288879',
-  api_secret: 'F0OXEL6772gWT1hqzDnWCZj1wGg' 
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dz8b5k9wp',
+  api_key: process.env.CLOUDINARY_API_KEY || '338861446288879',
+  api_secret: process.env.CLOUDINARY_API_SECRET || 'F0OXEL6772gWT1hqzDnWCZj1wGg' 
 });
 
 // Configuration Multer

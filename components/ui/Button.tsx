@@ -4,6 +4,8 @@ import { motion, HTMLMotionProps } from 'framer-motion';
 interface ButtonProps extends HTMLMotionProps<"button"> {
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   isLoading?: boolean;
+  children?: React.ReactNode;
+  className?: string;
 }
 
 export const Button: React.FC<ButtonProps> = ({ 
@@ -11,6 +13,7 @@ export const Button: React.FC<ButtonProps> = ({
   variant = 'primary', 
   isLoading, 
   className = '', 
+  disabled,
   ...props 
 }) => {
   const baseStyles = "relative w-full py-2.5 px-4 rounded-xl font-semibold text-sm transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 overflow-hidden";
@@ -22,12 +25,14 @@ export const Button: React.FC<ButtonProps> = ({
     ghost: "bg-transparent hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-400"
   };
 
+  const isDisabled = isLoading || disabled;
+
   return (
     <motion.button 
-      whileHover={{ scale: props.disabled ? 1 : 1.02 }}
-      whileTap={{ scale: props.disabled ? 1 : 0.98 }}
+      whileHover={{ scale: isDisabled ? 1 : 1.02 }}
+      whileTap={{ scale: isDisabled ? 1 : 0.98 }}
       className={`${baseStyles} ${variants[variant]} ${className}`}
-      disabled={isLoading || props.disabled}
+      disabled={isDisabled}
       {...props}
     >
       {isLoading ? (

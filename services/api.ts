@@ -100,7 +100,18 @@ export const getOnlineUsersAPI = async (): Promise<string[]> => {
     try { return await fetchWithAuth('/users/online'); } catch (e) { return []; }
 };
 
-// --- CONVERSATIONS ---
+// --- PROFILE ---
+export const updateProfile = async (data: { username?: string; email?: string }): Promise<User> => {
+    return await fetchWithAuth('/users/profile', { method: 'PUT', body: JSON.stringify(data) });
+};
+
+export const updateAvatar = async (file: File): Promise<{ avatarUrl: string }> => {
+    const formData = new FormData();
+    formData.append('avatar', file);
+    return await fetchWithAuth('/users/avatar', { method: 'POST', body: formData });
+};
+
+// --- CONVERSATIONS & GROUPS ---
 export const getConversationsAPI = async (userId: string): Promise<Conversation[]> => {
     return await fetchWithAuth('/conversations');
 };
@@ -109,6 +120,35 @@ export const createGroupConversationAPI = async (name: string, participantIds: s
     return await fetchWithAuth('/conversations', {
         method: 'POST',
         body: JSON.stringify({ name, participantIds })
+    });
+};
+
+// Alias for createGroup
+export const createGroup = createGroupConversationAPI;
+
+export const updateGroup = async (id: string, data: { name?: string }): Promise<Conversation> => {
+    return await fetchWithAuth(`/conversations/${id}`, { 
+        method: 'PUT', 
+        body: JSON.stringify(data) 
+    });
+};
+
+export const addMembers = async (id: string, userIds: string[]): Promise<void> => {
+    return await fetchWithAuth(`/conversations/${id}/members`, { 
+        method: 'POST', 
+        body: JSON.stringify({ userIds }) 
+    });
+};
+
+export const removeMember = async (id: string, userId: string): Promise<void> => {
+    return await fetchWithAuth(`/conversations/${id}/members/${userId}`, { 
+        method: 'DELETE' 
+    });
+};
+
+export const leaveGroup = async (id: string): Promise<void> => {
+    return await fetchWithAuth(`/conversations/${id}/leave`, { 
+        method: 'DELETE' 
     });
 };
 

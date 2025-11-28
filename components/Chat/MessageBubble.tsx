@@ -232,7 +232,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   {showEmojiPicker && (
                     <div 
                         ref={pickerRef} 
-                        className={`absolute bottom-full mb-2 p-2 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 flex flex-wrap gap-1 z-50 max-w-[200px] w-max ${isOwn ? 'right-0' : 'left-0'}`}
+                        className={`absolute bottom-full mb-2 p-2 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 flex flex-wrap gap-1 z-[100] max-w-[200px] w-max ${isOwn ? 'right-0' : 'left-0'}`}
                     >
                         {COMMON_EMOJIS.map(emoji => (
                             <button

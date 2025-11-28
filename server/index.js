@@ -35,7 +35,23 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
+// --- HELPER FUNCTIONS ---
+const getAggregatedReactions = async (messageId) => {
+    try {
+        const res = await pool.query('SELECT emoji, user_id FROM message_reactions WHERE message_id = $1', [messageId]);
+        return res.rows;
+    } catch (err) {
+        console.error("Error aggregating reactions:", err);
+        return [];
+    }
+};
+
 // --- MIDDLEWARE ---
+app.use((req, res, next) => {
+    console.log(`[REQUEST] ${req.method} ${req.url}`);
+    next();
+});
+
 app.use(cors({
     origin: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -43,13 +59,14 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 })); 
 
-// Increase limit for JSON/UrlEncoded
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // --- SOCKET.IO ---
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    pingTimeout: 60000, // Increase timeout to 60s
+    pingInterval: 25000
 });
 
 io.on('connection', async (socket) => {
@@ -100,56 +117,68 @@ const authenticateToken = (req, res, next) => {
 };
 
 // --- ROUTES ---
-app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
 
-// --- REACTIONS (CRITICAL: PLACED FIRST) ---
+// 1. REACTIONS ROUTE (Priority High)
+// Defines POST /api/messages/:id/react
 app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
     const messageId = req.params.id;
     const userId = req.user.id;
-    const { emoji } = req.body;
-    console.log(`[REACTION] User ${userId} reacting with ${emoji} to msg ${messageId}`);
+    const { emoji } = req.body; 
+
+    console.log(`[DEBUG-REACTION] Réaction reçue pour message ${messageId} par ${userId} : ${emoji}`);
 
     try {
-        if (!emoji) return res.status(400).json({ error: "Emoji requis" });
-
-        // Check if message exists
-        const msgRes = await pool.query(`
-            SELECT m.conversation_id 
-            FROM messages m 
-            JOIN participants p ON p.conversation_id = m.conversation_id 
-            WHERE m.id = $1 AND p.user_id = $2
-        `, [messageId, userId]);
-
-        if (msgRes.rows.length === 0) {
-            return res.status(404).json({ error: "Message introuvable ou accès refusé" });
+        // 1. Check if message exists
+        const msgCheck = await pool.query('SELECT conversation_id FROM messages WHERE id = $1', [messageId]);
+        if (msgCheck.rows.length === 0) {
+            console.log(`[DEBUG-REACTION] Message ${messageId} not found`);
+            return res.status(404).json({ error: "Message introuvable" });
         }
+        const conversationId = msgCheck.rows[0].conversation_id;
 
-        const conversationId = msgRes.rows[0].conversation_id;
-
-        // Toggle logic
-        const existingRes = await pool.query(
-            'SELECT * FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3',
-            [messageId, userId, emoji]
-        );
-
-        if (existingRes.rows.length > 0) {
-            await pool.query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [messageId, userId, emoji]);
+        // 2. Handle Reaction Logic
+        if (!emoji) {
+            // Suppression de la réaction
+            await pool.query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2', [messageId, userId]);
         } else {
-            await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [messageId, userId, emoji]);
+            // Toggle Logic: If exists with same emoji -> remove it. If different -> update. If none -> insert.
+            const existing = await pool.query('SELECT emoji FROM message_reactions WHERE message_id = $1 AND user_id = $2', [messageId, userId]);
+            
+            if (existing.rows.length > 0) {
+                if (existing.rows[0].emoji === emoji) {
+                    // Same emoji: Remove it (Toggle off)
+                    await pool.query('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2', [messageId, userId]);
+                } else {
+                    // Different emoji: Update it
+                    await pool.query('UPDATE message_reactions SET emoji = $3, created_at = NOW() WHERE message_id = $1 AND user_id = $2', [messageId, userId, emoji]);
+                }
+            } else {
+                // New reaction
+                await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)', [messageId, userId, emoji]);
+            }
         }
 
-        const reactionsRes = await pool.query('SELECT emoji, user_id FROM message_reactions WHERE message_id = $1', [messageId]);
-        const reactions = reactionsRes.rows;
+        // 3. Get updated list using Helper
+        const reactions = await getAggregatedReactions(messageId);
+        
+        // 4. Broadcast
+        io.to(conversationId).emit('message_reaction_update', {
+            messageId: messageId,
+            reactions: reactions
+        });
 
-        io.to(conversationId).emit('message_reaction_update', { messageId, reactions });
         res.json({ success: true, reactions });
-
     } catch (err) {
-        console.error("Reaction Error:", err);
-        res.status(500).json({ error: err.message });
+        console.error("[DEBUG-REACTION] Erreur:", err);
+        res.status(500).json({ error: "Erreur serveur réaction" });
     }
 });
 
+console.log("[SERVER STARTUP] Route /api/messages/:id/react registered.");
+
+app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
+
+// AUTH
 app.post('/api/auth/register', async (req, res) => {
     let { username, email, password } = req.body;
     try {
@@ -177,6 +206,7 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// USERS
 app.get('/api/users/online', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id FROM users WHERE is_online = TRUE');
@@ -208,6 +238,7 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// CONVERSATIONS
 app.post('/api/conversations', authenticateToken, async (req, res) => {
     const { name, participantIds } = req.body; 
     const userId = req.user.id;
@@ -308,7 +339,6 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// MESSAGES GET
 app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
@@ -348,18 +378,13 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- IMAGE UPLOAD & MESSAGE SENDING ---
-
-// Wrapper pour Multer afin de voir les erreurs
+// MESSAGE SENDING & UPLOAD
 const uploadMiddleware = upload.single('media');
 
 app.post('/api/messages', authenticateToken, (req, res, next) => {
     uploadMiddleware(req, res, (err) => {
         if (err) {
             console.error('[MULTER DEBUG] Error:', err);
-            if (err instanceof multer.MulterError) {
-                return res.status(400).json({ error: `Multer Error: ${err.message}` });
-            }
             return res.status(500).json({ error: `Upload Error: ${err.message}` });
         }
         next();
@@ -369,10 +394,6 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
     const { conversation_id, replied_to_message_id } = req.body;
     const senderId = req.user.id;
     
-    // Log request body and file status
-    console.log(`[DEBUG-RENDER] Request Body Keys:`, Object.keys(req.body));
-    console.log(`[DEBUG-RENDER] File present:`, !!req.file);
-
     let content = req.body.content;
     if (!content || content === 'undefined' || content === 'null') {
         content = '';
@@ -383,8 +404,7 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
 
     // --- LOGIQUE DE TÉLÉCHARGEMENT CLOUDINARY ---
     if (req.file) {
-        console.log(`[DEBUG-RENDER] Start Upload: ${req.file.originalname} (${req.file.size} bytes)`);
-        
+        console.log(`[DEBUG-RENDER] Start Upload: ${req.file.originalname}`);
         try {
             const uploadResult = await new Promise((resolve, reject) => {
                 const uploadStream = cloudinary.uploader.upload_stream(
@@ -393,13 +413,8 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
                         resource_type: "auto"
                     },
                     (error, result) => {
-                        if (error) { 
-                            console.error("[DEBUG-RENDER] Cloudinary Callback Error:", error); 
-                            reject(error); 
-                        }
-                        else { 
-                            resolve(result); 
-                        }
+                        if (error) reject(error);
+                        else resolve(result); 
                     }
                 );
                 uploadStream.end(req.file.buffer);
@@ -410,34 +425,28 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
             console.log(`[DEBUG-RENDER] Upload Final URL: ${attachmentUrl}`);
 
         } catch (error) {
-            console.error('[DEBUG-RENDER] ❌ ERROR CLOUDINARY UPLOAD:', error);
-            return res.status(500).json({ error: "Échec de l'upload du média." });
+            console.error('[DEBUG-RENDER] ❌ ERROR CLOUDINARY:', error);
+            return res.status(500).json({ error: "Échec upload média." });
         }
     }
 
-    // Validation
     if (!attachmentUrl && content.trim() === '') {
-         console.log('[DEBUG-RENDER] Erreur: Message vide');
-         return res.status(400).json({ error: 'Message vide (ni texte ni image).' });
+         return res.status(400).json({ error: 'Message vide.' });
     }
 
     try {
-        console.log('[DEBUG-RENDER] Insertion SQL en cours...');
         const result = await pool.query(
             'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id, message_type, attachment_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
             [conversation_id, senderId, content, replied_to_message_id || null, messageType, attachmentUrl] 
         );
         const msg = result.rows[0];
 
-        // Marquer comme lu
         await pool.query('INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [msg.id, senderId]);
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
 
-        // Infos Expéditeur
         const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [senderId]);
         const sender = userRes.rows[0];
         
-        // Infos Réponse
         let replyData = null;
         if (msg.replied_to_message_id) {
              const rRes = await pool.query(`SELECT m.content, u.username, u.tag FROM messages m LEFT JOIN users u ON m.sender_id = u.id WHERE m.id = $1`, [msg.replied_to_message_id]);
@@ -459,7 +468,6 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
             reactions: []
         }; 
 
-        console.log("[DEBUG-RENDER] Socket Broadcast:", fullMsg.attachment_url);
         io.to(conversation_id).emit('new_message', fullMsg);
         
         const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversation_id]);
@@ -537,6 +545,11 @@ app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res)
             res.json({ success: true, conversationId: cid });
         } else res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// JSON 404 Handler
+app.use((req, res) => {
+    res.status(404).json({ error: "Route not found", path: req.url });
 });
 
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

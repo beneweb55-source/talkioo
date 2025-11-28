@@ -22,9 +22,11 @@ export const connectSocket = (token: string, userId: string) => {
     socket = io(SOCKET_URL, {
         auth: { token },
         query: { userId }, 
-        transports: ['websocket', 'polling'], 
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
+        // Polling first for better firewall/proxy compatibility, then upgrade to ws
+        transports: ['polling', 'websocket'], 
+        reconnectionAttempts: 10,
+        reconnectionDelay: 2000,
+        timeout: 60000 // 60s timeout
     });
 
     socket.on('connect', () => {
@@ -166,6 +168,7 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
 
 // --- REACTIONS ---
 export const reactToMessageAPI = async (messageId: string, emoji: string): Promise<any> => {
+    console.log(`[API] Reacting to ${messageId} with ${emoji}`);
     return await fetchWithAuth(`/messages/${messageId}/react`, {
         method: 'POST',
         body: JSON.stringify({ emoji })

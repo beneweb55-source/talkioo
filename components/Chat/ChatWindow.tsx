@@ -159,8 +159,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
           setShowGifPicker(false);
           setShowMobileMediaMenu(false);
       }
+      
+      // Delay to allow keyboard animation
       setTimeout(() => scrollToBottom('auto'), 100);
-      setTimeout(() => scrollToBottom('auto'), 300);
+      setTimeout(() => {
+          scrollToBottom('auto');
+          // Ensure input is visible (safeguard)
+          textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 400);
   };
 
   useEffect(() => {

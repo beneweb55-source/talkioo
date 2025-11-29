@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus, Sticker as StickerIcon, Mic, Trash2, StopCircle } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus, Sticker as StickerIcon, Mic, Trash2, StopCircle, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
 import { GroupManager } from '../Groups/GroupManager'; 
@@ -28,6 +28,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [headerAvatar, setHeaderAvatar] = useState<string | null>(null);
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
   
+  // Blocking States
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [isBlocking, setIsBlocking] = useState(false);
+  
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMatches, setSearchMatches] = useState<string[]>([]);
@@ -40,9 +44,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   const [showInputEmoji, setShowInputEmoji] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false); 
-  const [showStickerPicker, setShowStickerPicker] = useState(false); // NEW STATE
-  const [showMobileMediaMenu, setShowMobileMediaMenu] = useState(false); 
-  const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false); 
+  const [showStickerPicker, setShowStickerPicker] = useState(false);
+  const [showMediaMenu, setShowMediaMenu] = useState(false); // Consolidated menu state
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false); // Changed name from isGroupInfoOpen
 
   // RECORDING STATE
   const [isRecording, setIsRecording] = useState(false);
@@ -61,7 +65,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const gifPickerRef = useRef<HTMLDivElement>(null); 
   const stickerPickerRef = useRef<HTMLDivElement>(null); 
-  const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const mediaMenuRef = useRef<HTMLDivElement>(null);
   
   const isInsertingEmojiRef = useRef(false);
 
@@ -164,18 +168,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             setShowInputEmoji(false);
         }
         if (gifPickerRef.current && !gifPickerRef.current.contains(event.target as Node) && 
-            !(event.target as Element).closest('.gif-toggle-btn') && 
-            !(event.target as Element).closest('.mobile-media-btn')) {
+            !(event.target as Element).closest('.media-menu-item')) {
             setShowGifPicker(false);
         }
         if (stickerPickerRef.current && !stickerPickerRef.current.contains(event.target as Node) && 
-            !(event.target as Element).closest('.sticker-toggle-btn') && 
-            !(event.target as Element).closest('.mobile-media-btn')) {
+            !(event.target as Element).closest('.media-menu-item')) {
             setShowStickerPicker(false);
         }
-        if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node) &&
-            !(event.target as Element).closest('.mobile-plus-btn')) {
-            setShowMobileMediaMenu(false);
+        if (mediaMenuRef.current && !mediaMenuRef.current.contains(event.target as Node) &&
+            !(event.target as Element).closest('.plus-menu-btn')) {
+            setShowMediaMenu(false);
         }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -201,7 +203,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
           setShowInputEmoji(false);
           setShowGifPicker(false);
           setShowStickerPicker(false);
-          setShowMobileMediaMenu(false);
+          setShowMediaMenu(false);
       }
       
       // Delay to allow keyboard animation
@@ -219,12 +221,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             setHeaderName(conversation.name || 'Groupe');
             setHeaderAvatar(conversation.avatar_url || null);
             setOtherUserId(null);
+            setIsBlocked(false);
+            setIsBlocking(false);
         } else {
             const other = await getOtherParticipant(conversation.id, currentUser.id);
             if (other) {
-                setHeaderName(`${other.username}#${other.tag}`);
+                setHeaderName(other.username === 'Utilisateur Talkio' ? 'Utilisateur Talkio' : `${other.username}#${other.tag}`);
                 setHeaderAvatar(other.avatar_url || null);
                 setOtherUserId(other.id);
+                // Set blocked status from API response
+                setIsBlocked(!!other.is_blocking_me); // They blocked me
+                setIsBlocking(!!other.is_blocked_by_me); // I blocked them
             } else {
                 setHeaderName('Inconnu');
                 setHeaderAvatar(null);
@@ -232,7 +239,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }
       };
       loadName();
-  }, [conversation, currentUser]);
+  }, [conversation, currentUser, isDetailsOpen]); // Reload when details modal closes (in case of unblock)
 
   useEffect(() => {
     setLoading(true);
@@ -240,7 +247,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     setSelectedFile(null);
     setImagePreview(null);
     setIsSearchOpen(false);
-    setIsGroupInfoOpen(false); 
+    setIsDetailsOpen(false); 
     
     const fetchAndMark = async () => {
         try {
@@ -293,11 +300,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
     const unsubscribeProfile = subscribeToUserProfileUpdates((updatedUser) => {
         if (otherUserId === updatedUser.id) {
-            setHeaderName(`${updatedUser.username}#${updatedUser.tag}`);
-            setHeaderAvatar(updatedUser.avatar_url || null);
+             // If I have blocked this user, the name should stay masked unless handled differently.
+             // But subscribeToUserProfileUpdates passes RAW user data.
+             // We'll rely on reloading the conversation or checking current block state.
+             // For now, update if not blocking.
+             if (!isBlocking && !isBlocked) {
+                setHeaderName(`${updatedUser.username}#${updatedUser.tag}`);
+                setHeaderAvatar(updatedUser.avatar_url || null);
+             }
         }
         setMessages(prev => prev.map(m => {
             if (m.sender_id === updatedUser.id) {
+                // Same logic, if blocked, maybe keep it clean, but for messages it's less critical than header
                 return { ...m, sender_username: `${updatedUser.username}#${updatedUser.tag}` };
             }
             return m;
@@ -465,12 +479,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!inputText.trim() && !selectedFile) || isSending) return;
+    if (isBlocked || isBlocking) {
+        alert("Impossible d'envoyer un message (Utilisateur bloqué)");
+        return;
+    }
     
     setIsSending(true);
     setShowInputEmoji(false);
     setShowGifPicker(false);
     setShowStickerPicker(false);
-    setShowMobileMediaMenu(false);
+    setShowMediaMenu(false);
     
     if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
@@ -539,15 +557,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             setSelectedFile(fileToSend);
             setImagePreview(currentPreview);
         }
+        alert(err.message || "Erreur lors de l'envoi");
     } finally {
         setIsSending(false);
     }
   };
 
   const isOnline = otherUserId && onlineUsers.has(otherUserId);
-  const canSend = (inputText.trim().length > 0 || selectedFile !== null) && !isSending;
+  const canSend = (inputText.trim().length > 0 || selectedFile !== null) && !isSending && !isBlocked && !isBlocking;
   // Show Mic if input is empty and no file selected
-  const showMic = !inputText.trim() && !selectedFile && !isSending && !isRecording;
+  const showMic = !inputText.trim() && !selectedFile && !isSending && !isRecording && !isBlocked && !isBlocking;
 
   return (
     <div 
@@ -557,15 +576,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" 
              style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
 
-        {/* --- GROUP MANAGER OVERLAY --- */}
+        {/* --- CONVERSATION DETAILS / GROUP MANAGER OVERLAY --- */}
         <AnimatePresence>
-            {isGroupInfoOpen && (
+            {isDetailsOpen && (
                 <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
                     <GroupManager 
                         conversation={conversation}
                         currentUser={currentUser}
                         contacts={contacts}
-                        onClose={() => setIsGroupInfoOpen(false)}
+                        onClose={() => setIsDetailsOpen(false)}
                         onUpdate={() => {}}
                     />
                 </div>
@@ -612,10 +631,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                             <ArrowLeft size={22} />
                         </button>
                         
-                        {/* Header Info - Clickable for Groups */}
+                        {/* Header Info - Clickable for details (Group or 1:1) */}
                         <div 
-                            className={`flex items-center gap-3 ${conversation.is_group ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
-                            onClick={() => conversation.is_group && setIsGroupInfoOpen(true)}
+                            className={`flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity`}
+                            onClick={() => setIsDetailsOpen(true)}
                         >
                             <div className="relative">
                                 <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
@@ -625,15 +644,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                                         conversation.is_group ? <Users size={20} /> : headerName?.charAt(0).toUpperCase()
                                     )}
                                 </div>
-                                {isOnline && !conversation.is_group && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
+                                {isOnline && !conversation.is_group && !isBlocked && !isBlocking && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
                             </div>
                             <div>
                                 <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight flex items-center gap-1">
                                     {headerName}
                                     {conversation.is_group && <Info size={12} className="text-gray-400"/>}
+                                    {(isBlocked || isBlocking) && <Lock size={12} className="text-red-500"/>}
                                 </h2>
                                 <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">
-                                    {conversation.is_group ? 'Cliquez pour gérer' : (isOnline ? 'En ligne' : 'Hors ligne')}
+                                    {(isBlocked || isBlocking) ? 'Conversation bloquée' : (conversation.is_group ? 'Cliquez pour gérer' : (isOnline ? 'En ligne' : 'Hors ligne'))}
                                 </p>
                             </div>
                         </div>
@@ -664,6 +684,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                             highlightTerm={searchQuery}
                         />
                     ))}
+                    {(isBlocked || isBlocking) && (
+                        <div className="flex justify-center my-4">
+                            <div className="bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs py-2 px-4 rounded-full flex items-center gap-2">
+                                <Lock size={12}/> Vous ne pouvez plus envoyer de messages dans cette conversation.
+                            </div>
+                        </div>
+                    )}
                 </>
             )}
             <AnimatePresence>
@@ -680,200 +707,190 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             <div ref={messagesEndRef} />
         </div>
 
-        <div className="p-2 z-20 bg-transparent flex-shrink-0 relative">
-            <AnimatePresence>
-                {showInputEmoji && (
-                    <MotionDiv 
-                        ref={emojiPickerRef}
-                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                        className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
-                        style={{ width: 'min(350px, 90vw)' }}
-                    >
-                        <EmojiPicker 
-                            theme={Theme.AUTO}
-                            onEmojiClick={onEmojiClick}
-                            searchPlaceHolder="Rechercher..."
-                            width="100%"
-                            height={400}
-                        />
-                    </MotionDiv>
-                )}
-                {showGifPicker && (
-                    <MotionDiv 
-                        ref={gifPickerRef}
-                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                        className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
-                        style={{ width: 'min(350px, 90vw)', height: '400px' }}
-                    >
-                        <GifPicker onSelect={handleGifSelect} />
-                    </MotionDiv>
-                )}
-                {showStickerPicker && (
-                    <MotionDiv 
-                        ref={stickerPickerRef}
-                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                        className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
-                        style={{ width: 'min(350px, 90vw)', height: '400px' }}
-                    >
-                        <StickerPicker onSelect={handleStickerSelect} />
-                    </MotionDiv>
-                )}
-            </AnimatePresence>
-
-            <AnimatePresence>
-                {(editingMessage || replyingTo || imagePreview) && (
-                    <MotionDiv 
-                        initial={{ height: 0, opacity: 0, marginBottom: 0 }} 
-                        animate={{ height: 'auto', opacity: 1, marginBottom: 8 }} 
-                        exit={{ height: 0, opacity: 0, marginBottom: 0 }}
-                        className="mx-2 px-4 py-2 border-l-4 border-brand-500 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-r-lg shadow-sm flex justify-between items-center overflow-hidden"
-                    >
-                        <div className="flex items-center gap-3 overflow-hidden">
-                            {imagePreview && (
-                                <div className="h-12 w-12 rounded-lg bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0 relative">
-                                    <img src={imagePreview} alt="Preview" className="h-full w-full object-cover" />
-                                </div>
-                            )}
-                            <div className="text-xs overflow-hidden">
-                                {imagePreview ? (
-                                    <span className="font-bold text-brand-600 flex items-center gap-1">
-                                        <Image size={12}/> Image sélectionnée
-                                    </span>
-                                ) : (
-                                    <span className={`font-bold flex items-center gap-1 mb-0.5 ${editingMessage ? 'text-brand-600' : 'text-blue-500'}`}>
-                                        {editingMessage ? <><Pencil size={10}/> Modification</> : <><Reply size={10}/> Réponse à {replyingTo?.sender_username}</>}
-                                    </span>
-                                )}
-                                <div className="text-gray-600 dark:text-gray-300 truncate max-w-[200px]">
-                                    {imagePreview ? "Prêt à envoyer..." : (editingMessage?.content || replyingTo?.content)}
-                                </div>
-                            </div>
-                        </div>
-                        <button onClick={() => { setEditingMessage(null); setReplyingTo(null); setInputText(''); cancelImage(); }} className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors">
-                            <X size={14} className="text-gray-500" />
-                        </button>
-                    </MotionDiv>
-                )}
-            </AnimatePresence>
-
-            <div className="flex items-end gap-2 px-2 pb-2">
-                {isRecording ? (
-                    <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-red-500/30 flex items-center px-4 h-[50px] animate-pulse">
-                        <div className="h-3 w-3 bg-red-500 rounded-full animate-bounce mr-3"></div>
-                        <span className="flex-1 text-red-500 font-bold font-mono">{formatDuration(recordingDuration)}</span>
-                        <div className="text-xs text-gray-400 mr-2 uppercase font-semibold tracking-wider">Enregistrement...</div>
-                    </div>
-                ) : (
-                    <>
-                        <div className="flex-shrink-0 mb-1 flex gap-2 items-center">
-                            {/* Emoji Button - Always visible */}
-                            <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowStickerPicker(false); setShowMobileMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                                <Smile size={24} />
-                            </button>
-                            
-                            {/* Desktop: Direct Buttons */}
-                            <div className="hidden md:flex gap-2">
-                                <button onClick={() => { setShowGifPicker(!showGifPicker); setShowStickerPicker(false); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`gif-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showGifPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                                    <StickyNote size={24} />
-                                </button>
-                                <button onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`sticker-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showStickerPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                                    <StickerIcon size={24} />
-                                </button>
-                                <button onClick={() => fileInputRef.current?.click()} className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${selectedFile ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                                    <Image size={24} />
-                                </button>
-                            </div>
-
-                            {/* Mobile: Plus Button */}
-                            <div className="md:hidden relative">
-                                <button 
-                                    className={`mobile-plus-btn h-10 w-10 rounded-full flex items-center justify-center transition-all shadow-sm ${showMobileMediaMenu ? 'bg-brand-100 text-brand-600 rotate-45' : 'bg-gray-100 text-gray-500'}`}
-                                    onClick={() => setShowMobileMediaMenu(!showMobileMediaMenu)}
-                                >
-                                    <Plus size={24} />
-                                </button>
-                                <AnimatePresence>
-                                    {showMobileMediaMenu && (
-                                        <MotionDiv 
-                                            ref={mobileMenuRef}
-                                            initial={{ opacity: 0, scale: 0.9, y: 10 }}
-                                            animate={{ opacity: 1, scale: 1, y: -5 }}
-                                            exit={{ opacity: 0, scale: 0.9, y: 10 }}
-                                            className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 shadow-xl rounded-xl border border-gray-100 dark:border-gray-700 p-2 flex flex-col gap-2 min-w-[140px] z-50"
-                                        >
-                                            <button 
-                                                onClick={() => { setShowMobileMediaMenu(false); setShowGifPicker(true); }} 
-                                                className="mobile-media-btn flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                            >
-                                                <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg"><StickyNote size={18}/></div>
-                                                GIF
-                                            </button>
-                                            <button 
-                                                onClick={() => { setShowMobileMediaMenu(false); setShowStickerPicker(true); }} 
-                                                className="mobile-media-btn flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                            >
-                                                <div className="p-1.5 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-lg"><StickerIcon size={18}/></div>
-                                                Sticker
-                                            </button>
-                                            <button 
-                                                onClick={() => { setShowMobileMediaMenu(false); fileInputRef.current?.click(); }} 
-                                                className="flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                            >
-                                                <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg"><Image size={18}/></div>
-                                                Galerie
-                                            </button>
-                                        </MotionDiv>
-                                    )}
-                                </AnimatePresence>
-                            </div>
-
-                            <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/gif,image/webp" onChange={handleImageSelect} />
-                        </div>
-
-                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-gray-200 dark:border-gray-800 flex items-end overflow-hidden min-h-[50px]">
-                            <textarea
-                                ref={textareaRef}
-                                value={inputText}
-                                onChange={handleInputChange}
-                                onKeyDown={handleKeyDown}
-                                onFocus={handleInputFocus}
-                                rows={1}
-                                placeholder={selectedFile ? "Ajouter une légende..." : "Écrivez votre message..."}
-                                className="w-full bg-transparent border-none outline-none text-gray-800 dark:text-white px-4 py-3.5 placeholder-gray-400 resize-none max-h-[120px] overflow-y-auto leading-relaxed scrollbar-hide"
-                                style={{ minHeight: '50px' }}
+        {/* Input Area - Hidden if blocked */}
+        {!isBlocked && !isBlocking && (
+            <div className="p-2 z-20 bg-transparent flex-shrink-0 relative">
+                <AnimatePresence>
+                    {showInputEmoji && (
+                        <MotionDiv 
+                            ref={emojiPickerRef}
+                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                            className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
+                            style={{ width: 'min(350px, 90vw)' }}
+                        >
+                            <EmojiPicker 
+                                theme={Theme.AUTO}
+                                onEmojiClick={onEmojiClick}
+                                searchPlaceHolder="Rechercher..."
+                                width="100%"
+                                height={400}
                             />
-                        </div>
-                    </>
-                )}
+                        </MotionDiv>
+                    )}
+                    {showGifPicker && (
+                        <MotionDiv 
+                            ref={gifPickerRef}
+                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                            className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
+                            style={{ width: 'min(350px, 90vw)', height: '400px' }}
+                        >
+                            <GifPicker onSelect={handleGifSelect} />
+                        </MotionDiv>
+                    )}
+                    {showStickerPicker && (
+                        <MotionDiv 
+                            ref={stickerPickerRef}
+                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                            className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
+                            style={{ width: 'min(350px, 90vw)', height: '400px' }}
+                        >
+                            <StickerPicker onSelect={handleStickerSelect} />
+                        </MotionDiv>
+                    )}
+                </AnimatePresence>
 
-                {isRecording ? (
-                    <div className="flex gap-2">
-                         <MotionButton whileTap={{ scale: 0.9 }} onClick={cancelRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center bg-gray-200 hover:bg-red-100 dark:bg-gray-800 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500 transition-colors">
-                            <Trash2 size={24} />
-                        </MotionButton>
-                        <MotionButton whileTap={{ scale: 0.95 }} onClick={handleSendAudio} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-red-500 text-white hover:bg-red-600 transition-colors">
-                            <Send size={20} />
-                        </MotionButton>
-                    </div>
-                ) : (
-                    showMic ? (
-                         <MotionButton whileTap={{ scale: 0.95 }} onClick={startRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600 transition-all">
-                             <Mic size={24} />
-                         </MotionButton>
+                <AnimatePresence>
+                    {(editingMessage || replyingTo || imagePreview) && (
+                        <MotionDiv 
+                            initial={{ height: 0, opacity: 0, marginBottom: 0 }} 
+                            animate={{ height: 'auto', opacity: 1, marginBottom: 8 }} 
+                            exit={{ height: 0, opacity: 0, marginBottom: 0 }}
+                            className="mx-2 px-4 py-2 border-l-4 border-brand-500 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-r-lg shadow-sm flex justify-between items-center overflow-hidden"
+                        >
+                            <div className="flex items-center gap-3 overflow-hidden">
+                                {imagePreview && (
+                                    <div className="h-12 w-12 rounded-lg bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0 relative">
+                                        <img src={imagePreview} alt="Preview" className="h-full w-full object-cover" />
+                                    </div>
+                                )}
+                                <div className="text-xs overflow-hidden">
+                                    {imagePreview ? (
+                                        <span className="font-bold text-brand-600 flex items-center gap-1">
+                                            <Image size={12}/> Image sélectionnée
+                                        </span>
+                                    ) : (
+                                        <span className={`font-bold flex items-center gap-1 mb-0.5 ${editingMessage ? 'text-brand-600' : 'text-blue-500'}`}>
+                                            {editingMessage ? <><Pencil size={10}/> Modification</> : <><Reply size={10}/> Réponse à {replyingTo?.sender_username}</>}
+                                        </span>
+                                    )}
+                                    <div className="text-gray-600 dark:text-gray-300 truncate max-w-[200px]">
+                                        {imagePreview ? "Prêt à envoyer..." : (editingMessage?.content || replyingTo?.content)}
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={() => { setEditingMessage(null); setReplyingTo(null); setInputText(''); cancelImage(); }} className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors">
+                                <X size={14} className="text-gray-500" />
+                            </button>
+                        </MotionDiv>
+                    )}
+                </AnimatePresence>
+
+                <div className="flex items-end gap-2 px-2 pb-2">
+                    {isRecording ? (
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-red-500/30 flex items-center px-4 h-[50px] animate-pulse">
+                            <div className="h-3 w-3 bg-red-500 rounded-full animate-bounce mr-3"></div>
+                            <span className="flex-1 text-red-500 font-bold font-mono">{formatDuration(recordingDuration)}</span>
+                            <div className="text-xs text-gray-400 mr-2 uppercase font-semibold tracking-wider">Enregistrement...</div>
+                        </div>
                     ) : (
-                        <MotionButton whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} disabled={!canSend} onClick={handleSendMessage} className={`flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md transition-all duration-200 ${canSend ? 'bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600' : 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'}`}>
-                            {isSending ? <Loader2 size={20} className="animate-spin text-white" /> : <Send size={20} className={`ml-0.5 ${canSend ? 'text-white' : 'text-gray-400'}`} />}
-                        </MotionButton>
-                    )
-                )}
+                        <>
+                            <div className="flex-shrink-0 mb-1 flex gap-2 items-center">
+                                {/* Emoji Button */}
+                                <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowStickerPicker(false); setShowMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                                    <Smile size={24} />
+                                </button>
+                                
+                                {/* Unified Plus Button (Desktop & Mobile) */}
+                                <div className="relative">
+                                    <button 
+                                        className={`plus-menu-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-all shadow-sm ${showMediaMenu ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30 rotate-45' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}
+                                        onClick={() => { setShowMediaMenu(!showMediaMenu); setShowInputEmoji(false); }}
+                                    >
+                                        <Plus size={24} />
+                                    </button>
+                                    <AnimatePresence>
+                                        {showMediaMenu && (
+                                            <MotionDiv 
+                                                ref={mediaMenuRef}
+                                                initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                                                animate={{ opacity: 1, scale: 1, y: -8 }}
+                                                exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                                                className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-900 shadow-xl rounded-xl border border-gray-100 dark:border-gray-800 p-2 flex flex-col gap-2 min-w-[150px] z-50 backdrop-blur-md"
+                                            >
+                                                <button 
+                                                    onClick={() => { setShowMediaMenu(false); setShowGifPicker(true); }} 
+                                                    className="media-menu-item flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                                >
+                                                    <div className="p-1.5 bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 rounded-lg"><StickyNote size={18}/></div>
+                                                    GIF
+                                                </button>
+                                                <button 
+                                                    onClick={() => { setShowMediaMenu(false); setShowStickerPicker(true); }} 
+                                                    className="media-menu-item flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                                >
+                                                    <div className="p-1.5 bg-orange-100 dark:bg-orange-900/40 text-orange-600 dark:text-orange-400 rounded-lg"><StickerIcon size={18}/></div>
+                                                    Sticker
+                                                </button>
+                                                <button 
+                                                    onClick={() => { setShowMediaMenu(false); fileInputRef.current?.click(); }} 
+                                                    className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                                >
+                                                    <div className="p-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-lg"><Image size={18}/></div>
+                                                    Galerie
+                                                </button>
+                                            </MotionDiv>
+                                        )}
+                                    </AnimatePresence>
+                                </div>
+
+                                <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/gif,image/webp" onChange={handleImageSelect} />
+                            </div>
+
+                            <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-gray-200 dark:border-gray-800 flex items-end overflow-hidden min-h-[50px]">
+                                <textarea
+                                    ref={textareaRef}
+                                    value={inputText}
+                                    onChange={handleInputChange}
+                                    onKeyDown={handleKeyDown}
+                                    onFocus={handleInputFocus}
+                                    rows={1}
+                                    placeholder={selectedFile ? "Ajouter une légende..." : "Écrivez votre message..."}
+                                    className="w-full bg-transparent border-none outline-none text-gray-800 dark:text-white px-4 py-3.5 placeholder-gray-400 resize-none max-h-[120px] overflow-y-auto leading-relaxed scrollbar-hide"
+                                    style={{ minHeight: '50px' }}
+                                />
+                            </div>
+                        </>
+                    )}
+
+                    {isRecording ? (
+                        <div className="flex gap-2">
+                             <MotionButton whileTap={{ scale: 0.9 }} onClick={cancelRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center bg-gray-200 hover:bg-red-100 dark:bg-gray-800 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500 transition-colors">
+                                <Trash2 size={24} />
+                            </MotionButton>
+                            <MotionButton whileTap={{ scale: 0.95 }} onClick={handleSendAudio} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-red-500 text-white hover:bg-red-600 transition-colors">
+                                <Send size={20} />
+                            </MotionButton>
+                        </div>
+                    ) : (
+                        showMic ? (
+                             <MotionButton whileTap={{ scale: 0.95 }} onClick={startRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600 transition-all">
+                                 <Mic size={24} />
+                             </MotionButton>
+                        ) : (
+                            <MotionButton whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} disabled={!canSend} onClick={handleSendMessage} className={`flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md transition-all duration-200 ${canSend ? 'bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600' : 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'}`}>
+                                {isSending ? <Loader2 size={20} className="animate-spin text-white" /> : <Send size={20} className={`ml-0.5 ${canSend ? 'text-white' : 'text-gray-400'}`} />}
+                            </MotionButton>
+                        )
+                    )}
+                </div>
             </div>
-        </div>
+        )}
     </div>
   );
 };

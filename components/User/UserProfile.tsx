@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { updateProfileAPI, updatePasswordAPI } from '../../services/api';
+import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI } from '../../services/api';
+import { User } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera } from 'lucide-react';
+import { X, Camera, Shield, UserX, Unlock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -14,7 +15,7 @@ interface UserProfileProps {
 
 export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const { user, login } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'password'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'blocked'>('profile');
   
   const [username, setUsername] = useState(user?.username || '');
   const [email, setEmail] = useState(user?.email || '');
@@ -28,6 +29,8 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
+  
+  const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
 
   // Sync state if user updates from elsewhere (e.g. Socket in App.tsx)
   useEffect(() => {
@@ -40,6 +43,12 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
         }
     }
   }, [user, selectedAvatar]);
+
+  useEffect(() => {
+      if (activeTab === 'blocked') {
+          getBlockedUsersAPI().then(setBlockedUsers).catch(console.error);
+      }
+  }, [activeTab]);
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
@@ -92,6 +101,13 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
     }
   };
 
+  const handleUnblock = async (id: string) => {
+      try {
+          await unblockUserAPI(id);
+          setBlockedUsers(prev => prev.filter(u => u.id !== id));
+      } catch(e) { console.error(e); }
+  };
+
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-800 relative">
       <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
@@ -138,6 +154,13 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
             Sécurité
             {activeTab === 'password' && <MotionDiv layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
         </button>
+        <button 
+            onClick={() => setActiveTab('blocked')}
+            className={`flex-1 pb-2 text-sm font-medium transition-colors relative ${activeTab === 'blocked' ? 'text-brand-600 dark:text-brand-400' : 'text-gray-500'}`}
+        >
+            Bloqués
+            {activeTab === 'blocked' && <MotionDiv layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
+        </button>
       </div>
 
       <AnimatePresence>
@@ -148,18 +171,42 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       )}
       </AnimatePresence>
 
-      {activeTab === 'profile' ? (
+      {activeTab === 'profile' && (
         <form onSubmit={handleUpdateProfile} className="space-y-4">
             <Input label="Nom d'utilisateur" value={username} onChange={e => setUsername(e.target.value)} required />
             <Input label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
             <Button type="submit" isLoading={isLoading}>Enregistrer</Button>
         </form>
-      ) : (
+      )}
+
+      {activeTab === 'password' && (
         <form onSubmit={handleUpdatePassword} className="space-y-4">
             <Input label="Ancien mot de passe" type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} required />
             <Input label="Nouveau mot de passe" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
             <Button type="submit" isLoading={isLoading}>Changer le mot de passe</Button>
         </form>
+      )}
+
+      {activeTab === 'blocked' && (
+          <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
+              {blockedUsers.length === 0 && <p className="text-center text-gray-400 text-sm py-8">Aucun utilisateur bloqué.</p>}
+              {blockedUsers.map(u => (
+                  <div key={u.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                      <div className="flex items-center gap-3">
+                          <div className="h-8 w-8 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center font-bold text-gray-500 overflow-hidden">
+                              {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full object-cover"/> : u.username[0]}
+                          </div>
+                          <div>
+                              <p className="font-semibold text-sm dark:text-gray-200">{u.username}</p>
+                              <p className="text-xs text-gray-400">#{u.tag}</p>
+                          </div>
+                      </div>
+                      <button onClick={() => handleUnblock(u.id)} className="text-xs font-medium text-brand-600 bg-brand-50 hover:bg-brand-100 px-2 py-1 rounded-lg">
+                          Débloquer
+                      </button>
+                  </div>
+              ))}
+          </div>
       )}
     </div>
   );

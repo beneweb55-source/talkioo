@@ -1,3 +1,4 @@
+
 import { io, Socket } from 'socket.io-client';
 import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction, GroupMember, Sticker } from '../types';
 
@@ -118,6 +119,24 @@ export const updateProfileAPI = async (data: { username?: string; email?: string
 
 export const updatePasswordAPI = async (data: { oldPassword: string, newPassword: string }): Promise<void> => {
     return await fetchWithAuth('/users/password', { method: 'PUT', body: JSON.stringify(data) });
+};
+
+// --- BLOCKING & FRIENDS ---
+
+export const blockUserAPI = async (userId: string): Promise<void> => {
+    return await fetchWithAuth('/users/block', { method: 'POST', body: JSON.stringify({ userId }) });
+};
+
+export const unblockUserAPI = async (userId: string): Promise<void> => {
+    return await fetchWithAuth('/users/unblock', { method: 'POST', body: JSON.stringify({ userId }) });
+};
+
+export const getBlockedUsersAPI = async (): Promise<User[]> => {
+    return await fetchWithAuth('/users/blocked');
+};
+
+export const removeFriendAPI = async (friendId: string): Promise<void> => {
+    return await fetchWithAuth(`/friends/${friendId}`, { method: 'DELETE' });
 };
 
 // --- CONVERSATIONS & GROUPS ---

@@ -67,7 +67,7 @@ const getJumboEmojiClass = (text: string) => {
     return null;
 };
 
-// AUDIO PLAYER COMPONENT
+// --- MODERN AUDIO PLAYER COMPONENT ---
 const AudioMessagePlayer = ({ src, isOwn }: { src: string, isOwn: boolean }) => {
     const audioRef = useRef<HTMLAudioElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -111,24 +111,81 @@ const AudioMessagePlayer = ({ src, isOwn }: { src: string, isOwn: boolean }) => 
     }, []);
 
     const formatTime = (time: number) => {
-        if (!time) return "0:00";
+        if (!time || isNaN(time)) return "0:00";
         const m = Math.floor(time / 60);
         const s = Math.floor(time % 60);
         return `${m}:${s.toString().padStart(2, '0')}`;
     };
 
+    // Seek functionality
+    const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!audioRef.current) return;
+        const bar = e.currentTarget;
+        const rect = bar.getBoundingClientRect();
+        const percent = (e.clientX - rect.left) / rect.width;
+        audioRef.current.currentTime = percent * audioRef.current.duration;
+    };
+
     return (
-        <div className={`flex items-center gap-3 min-w-[200px] p-1`}>
-            <button onClick={togglePlay} className={`h-10 w-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors ${isOwn ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-brand-100 hover:bg-brand-200 text-brand-600 dark:bg-gray-700 dark:text-gray-200'}`}>
-                {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
+        <div className={`flex items-center gap-3 min-w-[220px] p-1`}>
+            {/* Circular Play/Pause Button */}
+            <button 
+                onClick={togglePlay} 
+                className={`
+                    h-11 w-11 rounded-full flex items-center justify-center flex-shrink-0 transition-all shadow-md
+                    ${isOwn 
+                        ? 'bg-white text-brand-500 hover:scale-105' 
+                        : 'bg-brand-500 text-white dark:bg-brand-500 hover:bg-brand-600'
+                    }
+                `}
+            >
+                {isPlaying ? <Pause size={20} fill="currentColor" className="ml-0.5" /> : <Play size={20} fill="currentColor" className="ml-1" />}
             </button>
-            <div className="flex-1 flex flex-col justify-center">
-                <div className={`h-1 w-full rounded-full overflow-hidden ${isOwn ? 'bg-black/20' : 'bg-gray-200 dark:bg-gray-700'}`}>
-                    <div className={`h-full ${isOwn ? 'bg-white' : 'bg-brand-500'}`} style={{ width: `${progress}%` }}></div>
+            
+            <div className="flex-1 flex flex-col justify-center gap-1.5">
+                {/* Waveform-like Progress Bar */}
+                <div 
+                    className="relative h-6 w-full cursor-pointer flex items-center group" 
+                    onClick={handleSeek}
+                >
+                    {/* Background Track (Simulated Waveform) */}
+                    <div className="absolute inset-0 flex items-center justify-between opacity-30 gap-[2px]">
+                         {Array.from({ length: 30 }).map((_, i) => (
+                             <div 
+                                key={i} 
+                                className={`w-1 rounded-full transition-all duration-300 ${isOwn ? 'bg-white' : 'bg-gray-800 dark:bg-gray-300'}`}
+                                style={{ height: `${Math.max(20, Math.random() * 100)}%` }}
+                             />
+                         ))}
+                    </div>
+
+                    {/* Progress Fill Mask */}
+                    <div 
+                        className="absolute left-0 top-0 bottom-0 overflow-hidden flex items-center justify-between gap-[2px] transition-all duration-100 ease-linear"
+                        style={{ width: `${progress}%` }}
+                    >
+                         {Array.from({ length: 30 }).map((_, i) => (
+                             <div 
+                                key={i} 
+                                className={`w-1 rounded-full flex-shrink-0 ${isOwn ? 'bg-white' : 'bg-brand-600 dark:bg-brand-400'}`}
+                                style={{ height: `${Math.max(20, Math.random() * 100)}%` }}
+                             />
+                         ))}
+                    </div>
+                    
+                    {/* Scrub Knob (Visible on hover or when playing) */}
+                    <div 
+                        className={`absolute top-1/2 -translate-y-1/2 h-3 w-3 rounded-full shadow-sm transition-all duration-75
+                        ${isOwn ? 'bg-white' : 'bg-brand-600 dark:bg-brand-400'}
+                        ${isPlaying ? 'scale-100' : 'scale-0 group-hover:scale-100'}
+                        `}
+                        style={{ left: `calc(${progress}% - 6px)` }}
+                    />
                 </div>
-                <div className={`flex justify-between text-[10px] mt-1 font-medium ${isOwn ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>
-                    <span>{formatTime(audioRef.current?.currentTime || 0)}</span>
-                    <span>{formatTime(duration)}</span>
+
+                <div className={`flex justify-between text-[11px] font-semibold ${isOwn ? 'text-white/90' : 'text-gray-500 dark:text-gray-400'}`}>
+                    <span>{isPlaying ? formatTime(audioRef.current?.currentTime || 0) : formatTime(duration)}</span>
+                    {/* Timestamp handled by parent for global consistency, but we can show duration here */}
                 </div>
             </div>
             <audio ref={audioRef} src={src} preload="metadata" className="hidden" />

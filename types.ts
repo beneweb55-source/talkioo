@@ -6,6 +6,8 @@ export interface User {
   email: string;
   created_at: string;
   avatar_url?: string | null; // URL de la photo de profil
+  is_blocked_by_me?: boolean;
+  is_blocking_me?: boolean;
 }
 
 export interface GroupMember {

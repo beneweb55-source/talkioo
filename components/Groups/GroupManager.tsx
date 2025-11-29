@@ -1,10 +1,9 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Conversation, User, GroupMember } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { updateGroup, addMembers, removeMember, leaveGroup, getGroupMembers } from '../../services/api';
-import { Users, UserPlus, Trash2, LogOut, Settings, Camera, Crown, ShieldAlert, X } from 'lucide-react';
+import { Users, UserPlus, Trash2, LogOut, Settings, Camera, Crown, ShieldAlert, X, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -62,7 +61,6 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
     try {
       await updateGroup(conversation.id, { name, avatar: selectedAvatar });
       onUpdate();
-      // Optional: Show success message
     } catch (error) {
       console.error(error);
     } finally {
@@ -101,7 +99,9 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
 
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-800 relative">
-      <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={20}/></button>
+      <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <X size={20}/>
+      </button>
       
       <div className="flex items-center gap-2 mb-6">
         <Settings className="text-brand-500" /> 
@@ -161,12 +161,12 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
             <AnimatePresence>
                 {isAddMode && (
                     <MotionDiv initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mb-4 overflow-hidden">
-                        <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-xl max-h-40 overflow-y-auto">
+                        <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-xl max-h-40 overflow-y-auto border border-gray-100 dark:border-gray-700">
                             {contacts.filter(c => !members.find(m => m.id === c.id)).length === 0 && <p className="text-xs text-gray-400 text-center">Aucun contact à ajouter.</p>}
                             {contacts.filter(c => !members.find(m => m.id === c.id)).map(contact => (
-                                <div key={contact.id} onClick={() => setSelectedContacts(prev => prev.includes(contact.id) ? prev.filter(c => c !== contact.id) : [...prev, contact.id])} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm ${selectedContacts.includes(contact.id) ? 'bg-brand-100 text-brand-700' : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'}`}>
-                                    <div className={`w-4 h-4 border rounded flex items-center justify-center ${selectedContacts.includes(contact.id) ? 'bg-brand-500 border-brand-500' : 'border-gray-400'}`}>
-                                        {selectedContacts.includes(contact.id) && <div className="w-2 h-2 bg-white rounded-full" />}
+                                <div key={contact.id} onClick={() => setSelectedContacts(prev => prev.includes(contact.id) ? prev.filter(c => c !== contact.id) : [...prev, contact.id])} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm mb-1 ${selectedContacts.includes(contact.id) ? 'bg-brand-50 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300' : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'}`}>
+                                    <div className={`w-4 h-4 border rounded flex items-center justify-center ${selectedContacts.includes(contact.id) ? 'bg-brand-500 border-brand-500 text-white' : 'border-gray-400'}`}>
+                                        {selectedContacts.includes(contact.id) && <Check size={12} />}
                                     </div>
                                     {contact.username}
                                 </div>
@@ -181,8 +181,8 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
                 {members.map(member => (
                     <div key={member.id} className="flex items-center justify-between p-2 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg">
                         <div className="flex items-center gap-3">
-                            <div className="h-8 w-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
-                                {member.avatar_url ? <img src={member.avatar_url} className="w-full h-full object-cover" /> : member.username[0].toUpperCase()}
+                            <div className="h-8 w-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center overflow-hidden font-bold text-gray-500">
+                                {member.avatar_url ? <img src={member.avatar_url} className="w-full h-full object-cover" alt={member.username} /> : member.username[0].toUpperCase()}
                             </div>
                             <div>
                                 <div className="flex items-center gap-1">
@@ -200,6 +200,7 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
                     </div>
                 ))}
             </div>
+        </div>
       )}
     </div>
   );

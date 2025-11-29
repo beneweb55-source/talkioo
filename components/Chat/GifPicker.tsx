@@ -92,9 +92,6 @@ export const GifPicker: React.FC<GifPickerProps> = ({ onSelect }) => {
                     </div>
                 )}
             </div>
-            <div className="p-1 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end flex-shrink-0">
-                <img src="https://attribution.tenor.com/img/powered_by_tenor_white.svg" alt="Powered by Tenor" className="h-4 opacity-50 dark:invert" />
-            </div>
         </div>
     );
 };

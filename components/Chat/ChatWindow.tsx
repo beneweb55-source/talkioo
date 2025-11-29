@@ -1,10 +1,12 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
+import { GroupManager } from '../Groups/GroupManager'; // Assuming this import exists or will be used by parent
 
 const MotionDiv = motion.div as any;
 const MotionButton = motion.button as any;
@@ -24,11 +26,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [headerAvatar, setHeaderAvatar] = useState<string | null>(null);
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
   
-  // Search State
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchMatches, setSearchMatches] = useState<string[]>([]); // Array of message IDs that match
-  const [currentMatchIndex, setCurrentMatchIndex] = useState(0); // Index in searchMatches
+  const [searchMatches, setSearchMatches] = useState<string[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
   
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -45,6 +46,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
+  
+  const isInsertingEmojiRef = useRef(false);
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
       requestAnimationFrame(() => {
@@ -70,7 +73,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       }
   }, [isSearchOpen]);
 
-  // Handle Search Logic
   useEffect(() => {
     if (!searchQuery.trim()) {
         setSearchMatches([]);
@@ -84,7 +86,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     
     setSearchMatches(matches);
     
-    // Automatically jump to the LAST match (most recent) when typing
     if (matches.length > 0) {
         setCurrentMatchIndex(matches.length - 1);
         scrollToMessage(matches[matches.length - 1]);
@@ -95,7 +96,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       const el = document.getElementById(`msg-${messageId}`);
       if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          // Optional: Add a flash effect or animation here via DOM manipulation if desired
       }
   };
 
@@ -139,7 +139,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   }, [isSearchOpen]);
 
   const handleInputFocus = () => {
-      setShowInputEmoji(false);
+      if (!isInsertingEmojiRef.current) {
+          setShowInputEmoji(false);
+      }
       setTimeout(() => scrollToBottom('auto'), 100);
       setTimeout(() => scrollToBottom('auto'), 300);
   };
@@ -148,7 +150,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       const loadName = async () => {
         if (conversation.is_group) {
             setHeaderName(conversation.name || 'Groupe');
-            setHeaderAvatar(null);
+            setHeaderAvatar(conversation.avatar_url || null); // Load Group Avatar
             setOtherUserId(null);
         } else {
             const other = await getOtherParticipant(conversation.id, currentUser.id);
@@ -199,7 +201,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             return [...prev, newMessage];
         });
         
-        // Only scroll if not searching/scrolling up
         if (!isSearchOpen) scrollToBottom('smooth');
         
         if (newMessage.sender_id !== currentUser.id) markMessagesAsReadAPI(conversation.id);
@@ -223,12 +224,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => getMessagesAPI(conversation.id).then(setMessages));
 
     const unsubscribeProfile = subscribeToUserProfileUpdates((updatedUser) => {
-        // Update Header
         if (otherUserId === updatedUser.id) {
             setHeaderName(`${updatedUser.username}#${updatedUser.tag}`);
             setHeaderAvatar(updatedUser.avatar_url || null);
         }
-        // Update Messages
         setMessages(prev => prev.map(m => {
             if (m.sender_id === updatedUser.id) {
                 return { ...m, sender_username: `${updatedUser.username}#${updatedUser.tag}` };
@@ -251,6 +250,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   };
 
   const onEmojiClick = (emojiData: EmojiClickData) => {
+    isInsertingEmojiRef.current = true;
     const cursor = textareaRef.current?.selectionStart || inputText.length;
     const text = inputText.slice(0, cursor) + emojiData.emoji + inputText.slice(cursor);
     setInputText(text);
@@ -260,6 +260,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             const newCursor = cursor + emojiData.emoji.length;
             textareaRef.current.setSelectionRange(newCursor, newCursor);
         }
+        setTimeout(() => { isInsertingEmojiRef.current = false; }, 50);
     }, 10);
   };
 
@@ -275,13 +276,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     if (file) {
         const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
         if (!validTypes.includes(file.type)) {
-            alert("Format non supporté. Veuillez utiliser JPG, PNG, GIF ou WEBP.");
+            alert("Format non supporté.");
             e.target.value = ''; 
             return;
         }
         const maxSize = 10 * 1024 * 1024; 
         if (file.size > maxSize) {
-            alert("L'image est trop volumineuse. Taille maximum : 10 Mo.");
+            alert("Image trop volumineuse. (Max 10Mo).");
             e.target.value = ''; 
             return;
         }
@@ -371,7 +372,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }
     } catch (err: any) {
         console.error("Erreur envoi:", err);
-        alert(`Erreur d'envoi: ${err.message || "Erreur inconnue"}`);
         setMessages(prev => prev.filter(m => m.id !== tempId));
         setInputText(textToSend);
         if (fileToSend) {
@@ -391,7 +391,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" 
              style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
 
-        {/* Header */}
         <div className="h-[70px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-gray-800/50 flex items-center justify-between px-4 z-20 shadow-sm flex-shrink-0">
             {isSearchOpen ? (
                 <div className="flex-1 flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
@@ -436,10 +435,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                                 {headerAvatar ? (
                                     <img src={headerAvatar} alt={headerName} className="h-full w-full object-cover" />
                                 ) : (
-                                    headerName?.charAt(0).toUpperCase()
+                                    conversation.is_group ? <Users size={20} /> : headerName?.charAt(0).toUpperCase()
                                 )}
                             </div>
-                            {isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
+                            {isOnline && !conversation.is_group && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
                         </div>
                         <div>
                             <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight">{headerName}</h2>
@@ -452,18 +451,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         <button onClick={() => setIsSearchOpen(true)} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors">
                             <Search size={20} />
                         </button>
-                        <button className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors hidden sm:block">
-                            <Video size={20} />
-                        </button>
-                        <button className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors hidden sm:block">
-                            <Phone size={20} />
-                        </button>
                     </div>
                 </>
             )}
         </div>
 
-        {/* Messages List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-2 z-10 no-scrollbar relative">
             {loading ? (
                 <div className="flex justify-center mt-10"><Loader2 className="animate-spin text-brand-500" size={32} /></div>
@@ -478,7 +470,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                             onDelete={async (m) => { if(window.confirm('Supprimer ?')) await deleteMessageAPI(m.id); }}
                             onReply={(m) => { setReplyingTo(m); setEditingMessage(null); textareaRef.current?.focus(); }}
                             onReact={handleReaction}
-                            highlightTerm={searchQuery} // Pass highlight term
+                            highlightTerm={searchQuery}
                         />
                     ))}
                 </>
@@ -497,7 +489,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area */}
         <div className="p-2 z-20 bg-transparent flex-shrink-0 relative">
             <AnimatePresence>
                 {showInputEmoji && (
@@ -558,34 +549,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
             <div className="flex items-end gap-2 px-2 pb-2">
                 <div className="flex-shrink-0 mb-1 flex gap-2">
-                     <button 
-                        onClick={() => setShowInputEmoji(!showInputEmoji)}
-                        className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm
-                            ${showInputEmoji 
-                                ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' 
-                                : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}
-                        `}
-                     >
+                     <button onClick={() => setShowInputEmoji(!showInputEmoji)} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                         <Smile size={24} />
                      </button>
-                    <button 
-                        onClick={() => fileInputRef.current?.click()} 
-                        className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm
-                            ${selectedFile 
-                                ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' 
-                                : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}
-                        `}
-                        title="Envoyer une image"
-                    >
+                    <button onClick={() => fileInputRef.current?.click()} className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${selectedFile ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                         <Image size={24} />
                     </button>
-                    <input 
-                        type="file" 
-                        ref={fileInputRef} 
-                        className="hidden" 
-                        accept="image/jpeg,image/png,image/gif,image/webp" 
-                        onChange={handleImageSelect}
-                    />
+                    <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/gif,image/webp" onChange={handleImageSelect} />
                 </div>
 
                 <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-gray-200 dark:border-gray-800 flex items-end overflow-hidden min-h-[50px]">
@@ -602,22 +572,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     />
                 </div>
 
-                <MotionButton 
-                    whileHover={{ scale: canSend ? 1.05 : 1 }}
-                    whileTap={{ scale: canSend ? 0.95 : 1 }}
-                    disabled={!canSend}
-                    onClick={handleSendMessage}
-                    className={`flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md transition-all duration-200
-                        ${canSend 
-                            ? 'bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600' 
-                            : 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'}
-                    `}
-                >
-                    {isSending ? (
-                        <Loader2 size={20} className="animate-spin text-white" />
-                    ) : (
-                        <Send size={20} className={`ml-0.5 ${canSend ? 'text-white' : 'text-gray-400'}`} />
-                    )}
+                <MotionButton whileHover={{ scale: canSend ? 1.05 : 1 }} whileTap={{ scale: canSend ? 0.95 : 1 }} disabled={!canSend} onClick={handleSendMessage} className={`flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md transition-all duration-200 ${canSend ? 'bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600' : 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'}`}>
+                    {isSending ? <Loader2 size={20} className="animate-spin text-white" /> : <Send size={20} className={`ml-0.5 ${canSend ? 'text-white' : 'text-gray-400'}`} />}
                 </MotionButton>
             </div>
         </div>

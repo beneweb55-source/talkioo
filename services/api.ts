@@ -1,5 +1,6 @@
+
 import { io, Socket } from 'socket.io-client';
-import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction } from '../types';
+import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction, GroupMember } from '../types';
 
 // --- CONFIGURATION ---
 const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
@@ -135,11 +136,19 @@ export const createGroupConversationAPI = async (name: string, participantIds: s
 // Alias for createGroup
 export const createGroup = createGroupConversationAPI;
 
-export const updateGroup = async (id: string, data: { name?: string }): Promise<Conversation> => {
-    return await fetchWithAuth(`/conversations/${id}`, { 
-        method: 'PUT', 
-        body: JSON.stringify(data) 
-    });
+export const updateGroup = async (id: string, data: { name?: string, avatar?: File | null }): Promise<Conversation> => {
+    if (data.avatar) {
+        const formData = new FormData();
+        if (data.name) formData.append('name', data.name);
+        formData.append('avatar', data.avatar);
+        return await fetchWithAuth(`/conversations/${id}`, { method: 'PUT', body: formData });
+    } else {
+        return await fetchWithAuth(`/conversations/${id}`, { method: 'PUT', body: JSON.stringify({ name: data.name }) });
+    }
+};
+
+export const getGroupMembers = async (id: string): Promise<GroupMember[]> => {
+    return await fetchWithAuth(`/conversations/${id}/members`);
 };
 
 export const addMembers = async (id: string, userIds: string[]): Promise<void> => {
@@ -185,23 +194,12 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
         if (file.size > 10 * 1024 * 1024) throw new Error("Image trop volumineuse (Max 10Mo)");
         
         const formData = new FormData();
-        
         formData.append('conversation_id', conversationId);
-        
-        // CORRECTION : Force explicit empty string if content is missing.
-        // This prevents 'null' string conversion issues on the backend.
         const safeContent = (content && content !== 'undefined' && content !== 'null') ? String(content) : "";
         formData.append('content', safeContent);
-        
         if (repliedToId) formData.append('replied_to_message_id', repliedToId);
-        
-        // Append file last
         formData.append('media', file);
-        
-        return await fetchWithAuth('/messages', { 
-            method: 'POST', 
-            body: formData 
-        });
+        return await fetchWithAuth('/messages', { method: 'POST', body: formData });
     } else {
         return await fetchWithAuth('/messages', { 
             method: 'POST', 
@@ -217,7 +215,6 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
 
 // --- REACTIONS ---
 export const reactToMessageAPI = async (messageId: string, emoji: string): Promise<any> => {
-    console.log(`[API] Reacting to ${messageId} with ${emoji}`);
     return await fetchWithAuth(`/messages/${messageId}/react`, {
         method: 'POST',
         body: JSON.stringify({ emoji })
@@ -347,10 +344,12 @@ export const subscribeToConversationsList = (onUpdate: () => void) => {
     const handler = () => onUpdate();
     socket.on('conversation_added', handler);
     socket.on('conversation_updated', handler);
+    socket.on('conversation_removed', handler);
     socket.on('request_accepted', handler);
     return () => {
         socket.off('conversation_added', handler);
         socket.off('conversation_updated', handler);
+        socket.off('conversation_removed', handler);
         socket.off('request_accepted', handler);
     };
 };

@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, Reaction } from '../../types';
-import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon, SmilePlus, Plus, X } from 'lucide-react';
+import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon, SmilePlus, Plus, X, Smile } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../context/AuthContext';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
 
 const MotionDiv = motion.div as any;
+const MotionButton = motion.button as any;
 
 interface MessageBubbleProps {
   message: Message;
@@ -14,19 +15,15 @@ interface MessageBubbleProps {
   onDelete?: (msg: Message) => void;
   onReply?: (msg: Message) => void;
   onReact?: (msg: Message, emoji: string) => void;
-  highlightTerm?: string; // New prop for search
+  highlightTerm?: string;
 }
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '🔥'];
 
-// Utility to highlight text
 const HighlightedText = ({ text, term }: { text: string, term: string }) => {
     if (!term || !text) return <>{text}</>;
-    
-    // Escape regex characters
     const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const parts = text.split(new RegExp(`(${escapedTerm})`, 'gi'));
-    
     return (
         <>
             {parts.map((part, i) => 
@@ -42,7 +39,6 @@ const HighlightedText = ({ text, term }: { text: string, term: string }) => {
 
 const renderContent = (text: string, highlightTerm?: string) => {
     if (!text) return null;
-    
     const parts = text.split(/((?:https?:\/\/|www\.)[^\s]+)/g);
     return parts.map((part, i) => {
         if (part.match(/^(https?:\/\/|www\.)/)) {
@@ -61,19 +57,11 @@ const renderContent = (text: string, highlightTerm?: string) => {
 const getJumboEmojiClass = (text: string) => {
     if (!text) return null;
     const cleanText = text.trim();
-    // Regex pour vérifier si le texte ne contient QUE des émojis et des espaces
     const isOnlyEmoji = /^(\p{Emoji_Presentation}|\p{Extended_Pictographic}|\s)+$/u.test(cleanText);
     
     if (isOnlyEmoji) {
         const count = [...cleanText].filter(c => c.trim() !== '').length;
-        
-        // --- LOGIQUE JUMBO / STICKER ---
-        
-        // 1 à 3 émojis : MÊME GRANDE TAILLE, PAS DE BULLE
-        // On retourne la classe de taille. Le composant gérera la suppression du bg.
         if (count >= 1 && count <= 3) return 'text-6xl tracking-widest';
-        
-        // 4+ émojis : On retourne null pour que ça utilise le rendu de texte standard (avec bulle)
         return null;
     }
     return null;
@@ -116,10 +104,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // --- GESTION TOUCH ---
   const onTouchStart = (e: React.TouchEvent) => {
       setTouchStart(e.targetTouches[0].clientX);
-      
       longPressTimer.current = setTimeout(() => {
           setShowReactionMenu(true); 
           if (navigator.vibrate) navigator.vibrate(50);
@@ -155,34 +141,25 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   const isLegacyBase64 = safeContent.startsWith('data:image');
   const isImage = !!attachmentUrl || isLegacyBase64 || message.message_type === 'image';
   
-  // Si jumboClass est défini, c'est un "Sticker" (1-3 emojis). Sinon c'est null.
   const jumboClass = !isImage && !isDeleted ? getJumboEmojiClass(safeContent) : null;
 
   const reactionData: { [emoji: string]: { count: number, hasReacted: boolean, users: string[] } } = {};
-  if (message.reactions) {
+  let hasReactions = false;
+  if (message.reactions && message.reactions.length > 0) {
+      hasReactions = true;
       message.reactions.forEach(r => {
           if (!reactionData[r.emoji]) {
               reactionData[r.emoji] = { count: 0, hasReacted: false, users: [] };
           }
           reactionData[r.emoji].count += 1;
-          
           let displayName = r.username;
-          
-          // Sécurité : Si le backend ne renvoie pas le nom mais que c'est nous
           if (!displayName && user && String(r.user_id) === String(user.id)) {
               displayName = user.username;
           }
-
-          if (displayName) {
-              reactionData[r.emoji].users.push(displayName);
-          } else {
-             // Fallback visuel
-             reactionData[r.emoji].users.push("Inconnu");
-          }
+          if (displayName) reactionData[r.emoji].users.push(displayName);
+          else reactionData[r.emoji].users.push("Inconnu");
           
-          if (String(r.user_id) === String(user?.id)) {
-              reactionData[r.emoji].hasReacted = true;
-          }
+          if (String(r.user_id) === String(user?.id)) reactionData[r.emoji].hasReacted = true;
       });
   }
 
@@ -194,11 +171,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
 
   return (
     <MotionDiv 
-        id={`msg-${message.id}`} // ID for scroll target
+        id={`msg-${message.id}`}
         layout
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className={`flex w-full mb-3 ${isOwn ? 'justify-end' : 'justify-start'} group relative select-none md:select-text`}
+        /* Increase bottom margin if reactions exist to avoid overlap with next message */
+        className={`flex w-full ${hasReactions ? 'mb-8' : 'mb-3'} ${isOwn ? 'justify-end' : 'justify-start'} group relative select-none md:select-text`}
         onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
         style={{ zIndex: showReactionMenu || showFullPicker || clickedReactionEmoji ? 50 : 10 }}
     >
@@ -215,91 +193,97 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       >
         <div className={`relative flex flex-col min-w-[5rem]
             ${jumboClass 
-                ? 'bg-transparent shadow-none border-none p-1' // Pas de bulle pour les emojis seuls
+                ? 'bg-transparent shadow-none border-none p-1' 
                 : isOwn 
                     ? 'bg-gradient-to-br from-brand-500 to-brand-600 text-white rounded-2xl rounded-tr-sm shadow-sm' 
                     : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-2xl rounded-tl-sm border border-gray-100 dark:border-gray-700 shadow-sm'
             } 
             ${isDeleted ? 'opacity-80 italic px-4 py-2.5' : (jumboClass ? '' : 'px-4 py-2.5')}`}
         >
-          {/* Unified ToolBar: Reactions AND Actions (Edit/Delete) */}
-          {!isDeleted && (
-            <div 
-                ref={reactionMenuRef}
-                className={`
-                    absolute -top-14 z-50 flex items-center gap-1 p-1.5 bg-white dark:bg-gray-900 rounded-full shadow-xl border border-gray-100 dark:border-gray-700
-                    transition-all duration-200 transform origin-bottom whitespace-nowrap
-                    ${showReactionMenu ? 'scale-100 opacity-100' : 'scale-90 opacity-0 invisible group-hover:visible group-hover:scale-100 group-hover:opacity-100'}
-                    ${isOwn ? 'right-0' : 'left-0'}
-                `}
-            >
-                {QUICK_REACTIONS.map(emoji => (
-                    <button
-                        key={emoji}
-                        onClick={(e) => { e.stopPropagation(); onReact?.(message, emoji); setShowReactionMenu(false); }}
-                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-lg transition-transform hover:scale-110"
-                    >
-                        {emoji}
-                    </button>
-                ))}
-                
-                <button
-                    onClick={(e) => { e.stopPropagation(); setShowFullPicker(true); setShowReactionMenu(true); }}
-                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-500 dark:text-gray-400 transition-transform hover:scale-110 hover:text-brand-500"
+          {/* --- MODERN REACTION MENU --- */}
+          <AnimatePresence>
+            {!isDeleted && showReactionMenu && (
+                <MotionDiv 
+                    ref={reactionMenuRef}
+                    initial={{ opacity: 0, scale: 0.5, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: -45 }}
+                    exit={{ opacity: 0, scale: 0.5, y: 10 }}
+                    transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                    className={`
+                        absolute -top-6 z-50 flex items-center gap-1.5 p-2 bg-white/90 dark:bg-gray-900/90 backdrop-blur-md rounded-full shadow-2xl border border-gray-100 dark:border-gray-700
+                        whitespace-nowrap ${isOwn ? 'right-0 origin-bottom-right' : 'left-0 origin-bottom-left'}
+                    `}
+                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
                 >
-                    <Plus size={16} />
-                </button>
-
-                <div className="w-[1px] h-4 bg-gray-200 dark:bg-gray-700 mx-1"></div>
-
-                {onReply && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onReply(message); setShowReactionMenu(false); }}
-                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-500 dark:text-gray-400 hover:text-brand-500 transition-colors"
-                        title="Répondre"
+                    {QUICK_REACTIONS.map(emoji => (
+                        <MotionButton
+                            key={emoji}
+                            whileHover={{ scale: 1.2 }}
+                            whileTap={{ scale: 0.9 }}
+                            onClick={() => { onReact?.(message, emoji); setShowReactionMenu(false); }}
+                            className="p-1 md:p-1.5 rounded-full text-xl md:text-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                        >
+                            {emoji}
+                        </MotionButton>
+                    ))}
+                    
+                    <div className="w-[1px] h-5 bg-gray-300 dark:bg-gray-600 mx-0.5"></div>
+                    
+                    <MotionButton
+                        whileHover={{ scale: 1.1 }}
+                        onClick={() => { setShowFullPicker(true); setShowReactionMenu(true); }}
+                        className="p-1.5 hover:bg-brand-50 dark:hover:bg-brand-900/20 rounded-full text-gray-500 dark:text-gray-400 hover:text-brand-500"
                     >
-                        <Reply size={15} />
-                    </button>
-                )}
+                        <Plus size={18} />
+                    </MotionButton>
 
-                {isOwn && !isImage && !jumboClass && onEdit && (
-                     <button 
-                        onClick={(e) => { e.stopPropagation(); onEdit(message); setShowReactionMenu(false); }}
-                        className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-500 dark:text-gray-400 hover:text-blue-500 transition-colors"
-                        title="Modifier"
-                    >
-                        <Pencil size={14} />
-                    </button>
-                )}
-
-                {isOwn && onDelete && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onDelete(message); setShowReactionMenu(false); }}
-                        className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full text-gray-500 dark:text-gray-400 hover:text-red-500 transition-colors"
-                        title="Supprimer"
-                    >
-                        <Trash2 size={14} />
-                    </button>
-                )}
-
-                {showFullPicker && (
-                    <div 
-                        ref={fullPickerRef}
-                        className={`absolute top-full mt-2 z-[60] shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 ${isOwn ? 'right-0' : 'left-0'}`}
-                        style={{ width: '300px' }}
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <EmojiPicker 
-                            theme={Theme.AUTO}
-                            onEmojiClick={onFullEmojiClick}
-                            searchPlaceHolder="Rechercher..."
-                            width="100%"
-                            height={350}
-                            previewConfig={{ showPreview: false }}
-                        />
+                    {/* PC Specific Context Actions inside Menu */}
+                    <div className="hidden md:flex items-center gap-1 border-l border-gray-200 dark:border-gray-700 pl-1 ml-1">
+                        {onReply && (
+                            <button onClick={() => { onReply(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-brand-500 text-gray-400"><Reply size={15}/></button>
+                        )}
+                        {isOwn && onEdit && !isImage && (
+                             <button onClick={() => { onEdit(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-blue-500 text-gray-400"><Pencil size={14}/></button>
+                        )}
+                        {isOwn && onDelete && (
+                             <button onClick={() => { onDelete(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-red-500 text-gray-400"><Trash2 size={14}/></button>
+                        )}
                     </div>
-                )}
-            </div>
+
+                    {showFullPicker && (
+                        <div 
+                            ref={fullPickerRef}
+                            className={`absolute top-full mt-2 z-[60] shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 ${isOwn ? 'right-0' : 'left-0'}`}
+                            style={{ width: '300px' }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <EmojiPicker 
+                                theme={Theme.AUTO}
+                                onEmojiClick={onFullEmojiClick}
+                                searchPlaceHolder="Rechercher..."
+                                width="100%"
+                                height={350}
+                                previewConfig={{ showPreview: false }}
+                            />
+                        </div>
+                    )}
+                </MotionDiv>
+            )}
+          </AnimatePresence>
+
+          {/* PC Hover Trigger Button */}
+          {!isDeleted && !showReactionMenu && (
+             <button
+                onClick={(e) => { e.stopPropagation(); setShowReactionMenu(true); }}
+                className={`
+                    hidden md:flex absolute top-2 opacity-0 group-hover:opacity-100 transition-all duration-200
+                    p-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-400 hover:text-brand-500 shadow-sm border border-gray-200 dark:border-gray-700
+                    ${isOwn ? '-left-10' : '-right-10'}
+                `}
+                title="Ajouter une réaction"
+             >
+                <Smile size={16} />
+             </button>
           )}
 
           {message.reply && !isDeleted && !jumboClass && (
@@ -363,7 +347,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
               )}
           </div>
           
-          {/* Timestamp Container - Couleur adaptée si Jumbo */}
+          {/* Timestamp Container */}
           <div className={`
               flex items-center justify-end gap-1 mt-1 select-none flex-wrap w-full
               ${jumboClass 
@@ -400,7 +384,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                         <span className="font-semibold text-[10px]">{count}</span>
                     </button>
                     
-                    {/* Reaction Details Modal */}
                     <AnimatePresence>
                         {clickedReactionEmoji === emoji && (
                             <MotionDiv
@@ -416,25 +399,19 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                                     <button onClick={() => setClickedReactionEmoji(null)}><X size={12}/></button>
                                 </div>
                                 <div className="space-y-1 max-h-[120px] overflow-y-auto custom-scrollbar">
-                                    {users.length > 0 ? (
-                                        users.map((u, i) => (
-                                            <div key={i} className="text-sm text-gray-800 dark:text-gray-200 flex justify-between items-center py-0.5">
-                                                <span className="truncate max-w-[100px] font-medium">{u}</span>
-                                                {hasReacted && user?.username === u && (
-                                                    <button 
-                                                        onClick={() => { onReact?.(message, emoji); setClickedReactionEmoji(null); }}
-                                                        className="text-[10px] text-red-500 hover:text-red-600 ml-2"
-                                                    >
-                                                        Retirer
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))
-                                    ) : (
-                                        <span className="text-xs text-gray-400 block text-center py-1">
-                                            {hasReacted ? 'Moi' : 'Chargement...'}
-                                        </span>
-                                    )}
+                                    {users.map((u, i) => (
+                                        <div key={i} className="text-sm text-gray-800 dark:text-gray-200 flex justify-between items-center py-0.5">
+                                            <span className="truncate max-w-[100px] font-medium">{u}</span>
+                                            {hasReacted && user?.username === u && (
+                                                <button 
+                                                    onClick={() => { onReact?.(message, emoji); setClickedReactionEmoji(null); }}
+                                                    className="text-[10px] text-red-500 hover:text-red-600 ml-2"
+                                                >
+                                                    Retirer
+                                                </button>
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
                             </MotionDiv>
                         )}

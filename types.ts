@@ -1,3 +1,4 @@
+
 export interface User {
   id: string; // UUID
   username: string;
@@ -8,12 +9,12 @@ export interface User {
 }
 
 export interface GroupMember {
-  id: string;
-  user_id: string;
-  conversation_id: string;
+  id: string; // User ID
+  username: string;
+  tag: string;
+  avatar_url?: string | null;
   role: 'admin' | 'member';
   joined_at: string;
-  user?: User;
 }
 
 export interface Conversation {
@@ -21,6 +22,7 @@ export interface Conversation {
   name: string | null;
   is_group: boolean;
   created_at: string;
+  avatar_url?: string | null; // New field for group avatar
   last_message?: string;
   last_message_at?: string;
 }
@@ -29,6 +31,7 @@ export interface Participant {
   user_id: string;
   conversation_id: string;
   joined_at: string;
+  role?: 'admin' | 'member'; // New field
   last_deleted_at?: string | null; // For Soft Delete logic
 }
 
@@ -49,6 +52,7 @@ export interface Message {
   updated_at?: string; // New: For edit history
   deleted_at?: string; // New: For soft delete (delete for everyone)
   sender_username?: string;
+  sender_avatar?: string;
   read_count?: number;
   message_type?: 'text' | 'image' | 'video' | 'audio';
   attachment_url?: string;

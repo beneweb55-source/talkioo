@@ -1,8 +1,10 @@
+
 import React, { useEffect, useState } from 'react';
 import { Conversation, User } from '../../types';
 import { getOtherParticipant, subscribeToUserProfileUpdates } from '../../services/api';
-import { Users, User as UserIcon, Trash2 } from 'lucide-react';
+import { Users, User as UserIcon, Trash2, AlertTriangle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Button } from '../ui/Button';
 
 const MotionDiv = motion.div as any;
 
@@ -13,7 +15,7 @@ interface ConversationListProps {
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onlineUsers: Set<string>;
-  searchTerm?: string; // New prop
+  searchTerm?: string;
 }
 
 export const ConversationList: React.FC<ConversationListProps> = ({ 
@@ -25,18 +27,25 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   onlineUsers,
   searchTerm = ''
 }) => {
+  const [deleteId, setDeleteId] = useState<string | null>(null);
   
   const filtered = conversations.filter(c => {
       if (!searchTerm) return true;
       const term = searchTerm.toLowerCase();
-      // Basic check
       if (c.name && c.name.toLowerCase().includes(term)) return true;
       if (c.last_message && c.last_message.toLowerCase().includes(term)) return true;
       return false;
   });
 
+  const confirmDelete = () => {
+      if (deleteId) {
+          onDelete(deleteId);
+          setDeleteId(null);
+      }
+  };
+
   return (
-    <div className="flex-1 overflow-y-auto no-scrollbar px-2 py-2 space-y-1 pb-20 md:pb-2">
+    <div className="flex-1 overflow-y-auto no-scrollbar px-2 py-2 space-y-1 pb-20 md:pb-2 relative">
       <AnimatePresence>
         {filtered.length === 0 && (
             <MotionDiv 
@@ -62,17 +71,62 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     currentUser={currentUser} 
                     isActive={activeId === conv.id} 
                     onSelect={onSelect} 
-                    onDelete={onDelete} 
+                    onRequestDelete={(id: string) => setDeleteId(id)} 
                     onlineUsers={onlineUsers}
                 />
             </MotionDiv>
         ))}
       </AnimatePresence>
+
+      {/* Modern Delete Confirmation Modal */}
+      <AnimatePresence>
+        {deleteId && (
+            <MotionDiv
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 z-50 flex items-center justify-center bg-white/60 dark:bg-gray-900/60 backdrop-blur-md px-4"
+                onClick={() => setDeleteId(null)}
+            >
+                <MotionDiv
+                    initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                    animate={{ scale: 1, opacity: 1, y: 0 }}
+                    exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                    className="w-full max-w-sm bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 p-5"
+                >
+                    <div className="flex flex-col items-center text-center">
+                        <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center text-red-500 mb-3">
+                            <Trash2 size={24} />
+                        </div>
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-1">Supprimer la conversation ?</h3>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                            Cette action effacera l'historique de votre vue. C'est irréversible.
+                        </p>
+                        <div className="flex gap-3 w-full">
+                            <button 
+                                onClick={() => setDeleteId(null)}
+                                className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                            >
+                                Annuler
+                            </button>
+                            <button 
+                                onClick={confirmDelete}
+                                className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 transition-colors"
+                            >
+                                Supprimer
+                            </button>
+                        </div>
+                    </div>
+                </MotionDiv>
+            </MotionDiv>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
 
-const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onlineUsers }: any) => {
+const ConversationItem = ({ conv, currentUser, isActive, onSelect, onRequestDelete, onlineUsers }: any) => {
     const [name, setName] = useState(conv.name || 'Chargement...');
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
     const [otherUserId, setOtherUserId] = useState<string | null>(null);
@@ -81,8 +135,8 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
         const fetchName = async () => {
             if (conv.is_group) {
                 setName(conv.name);
+                setAvatarUrl(conv.avatar_url || null);
             } else {
-                // Initial setup from props if available (backend optimization)
                 if (conv.name && conv.name.includes('#')) {
                     setName(conv.name);
                 }
@@ -90,7 +144,6 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                     setAvatarUrl(conv.avatar_url);
                 }
                 
-                // Fetch full participant info if not fully populated
                 const other = await getOtherParticipant(conv.id, currentUser.id);
                 if (other) {
                     setName(`${other.username}#${other.tag}`);
@@ -104,7 +157,6 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
         fetchName();
     }, [conv, currentUser]);
 
-    // Listen for profile updates to update name/avatar instantly
     useEffect(() => {
         if (!otherUserId) return;
         const unsub = subscribeToUserProfileUpdates((updatedUser) => {
@@ -118,16 +170,29 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
 
     const isOnline = otherUserId && onlineUsers.has(otherUserId);
 
-    const handleDelete = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        if(window.confirm("Supprimer cette conversation ?")) {
-            onDelete(conv.id);
+    // Mobile Long Press Logic
+    const [touchTimeout, setTouchTimeout] = useState<any>(null);
+
+    const handleTouchStart = () => {
+        const timer = setTimeout(() => {
+             if(navigator.vibrate) navigator.vibrate(50);
+             onRequestDelete(conv.id);
+        }, 800); 
+        setTouchTimeout(timer);
+    };
+
+    const handleTouchEnd = () => {
+        if (touchTimeout) {
+            clearTimeout(touchTimeout);
+            setTouchTimeout(null);
         }
     };
 
     return (
         <MotionDiv 
             onClick={() => onSelect(conv.id)}
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.98 }}
             className={`
@@ -137,8 +202,7 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                     : 'hover:bg-white dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200'}
             `}
         >
-            {/* Added pr-14 to firmly prevent text from going under the delete button */}
-            <div className="flex items-center gap-3 overflow-hidden relative z-10 w-full pr-14">
+            <div className="flex items-center gap-3 overflow-hidden relative z-10 w-full">
                 <div className="relative flex-shrink-0">
                     <div className={`
                         h-12 w-12 rounded-full flex items-center justify-center text-lg font-bold shadow-sm overflow-hidden
@@ -146,7 +210,7 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                             ? 'bg-white/20 text-white backdrop-blur-sm' 
                             : 'bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800 text-gray-600 dark:text-gray-300'}
                     `}>
-                        {avatarUrl && !conv.is_group ? (
+                        {avatarUrl ? (
                             <img src={avatarUrl} alt={name} className="h-full w-full object-cover" />
                         ) : (
                             conv.is_group ? <Users size={20} /> : name.charAt(0).toUpperCase()
@@ -157,14 +221,38 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                     )}
                 </div>
                 
-                <div className="flex flex-col overflow-hidden flex-1 min-w-0 pr-1">
-                    <div className="flex justify-between items-baseline">
+                <div className="flex flex-col overflow-hidden flex-1 min-w-0">
+                    <div className="flex justify-between items-center">
                         <span className={`font-semibold text-sm truncate ${isActive ? 'text-white' : 'text-gray-900 dark:text-gray-100'}`}>
                             {name}
                         </span>
-                        <span className={`text-[10px] ml-2 flex-shrink-0 ${isActive ? 'text-brand-100' : 'text-gray-400'}`}>
-                             {new Date(conv.last_message_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        </span>
+                        
+                        {/* Time & Delete Swap Container */}
+                        <div className="relative ml-2 flex-shrink-0 min-w-[50px] text-right h-5">
+                            <span className={`
+                                text-[10px] absolute right-0 top-1/2 -translate-y-1/2 transition-all duration-300
+                                ${isActive ? 'text-brand-100' : 'text-gray-400 group-hover:opacity-0 group-hover:translate-x-2'}
+                            `}>
+                                 {new Date(conv.last_message_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            </span>
+                            
+                            {!isActive && (
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); onRequestDelete(conv.id); }}
+                                    className="
+                                        absolute right-0 top-1/2 -translate-y-1/2 p-1.5 
+                                        text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full 
+                                        opacity-0 translate-x-2 scale-75 
+                                        group-hover:opacity-100 group-hover:translate-x-0 group-hover:scale-100 
+                                        transition-all duration-300
+                                        hidden md:block
+                                    "
+                                    title="Supprimer"
+                                >
+                                    <Trash2 size={16} />
+                                </button>
+                            )}
+                        </div>
                     </div>
                     <div className="flex justify-between items-center mt-0.5">
                         <span className={`text-xs truncate max-w-[95%] ${isActive ? 'text-brand-100' : 'text-gray-500 dark:text-gray-400'}`}>
@@ -173,15 +261,6 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                     </div>
                 </div>
             </div>
-
-            {!isActive && (
-                <button 
-                    onClick={handleDelete} 
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full opacity-0 group-hover:opacity-100 transition-all z-20"
-                >
-                    <Trash2 size={16} />
-                </button>
-            )}
         </MotionDiv>
     );
 };

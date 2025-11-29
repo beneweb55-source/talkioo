@@ -226,7 +226,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         } else {
             const other = await getOtherParticipant(conversation.id, currentUser.id);
             if (other) {
-                setHeaderName(other.username === 'Utilisateur Talkio' ? 'Utilisateur Talkio' : `${other.username}#${other.tag}`);
+                setHeaderName(other.username === 'Utilisateur Evo' ? 'Utilisateur Evo' : `${other.username}#${other.tag}`);
                 setHeaderAvatar(other.avatar_url || null);
                 setOtherUserId(other.id);
                 // Set blocked status from API response

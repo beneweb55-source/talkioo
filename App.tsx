@@ -34,7 +34,15 @@ const Dashboard = () => {
   
   // UI State
   const [loading, setLoading] = useState(true);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  
+  // Initialize Theme from LocalStorage with lazy initialization to prevent flash
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const storedTheme = localStorage.getItem('theme');
+    if (storedTheme === 'dark') return true;
+    if (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches) return true;
+    return false;
+  });
+
   const [mobileView, setMobileView] = useState<MobileView>('chats');
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -52,9 +60,19 @@ const Dashboard = () => {
 
   usePushNotifications(user?.id);
 
+  // Apply Theme Side Effects
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
+
   const toggleTheme = () => {
-    setIsDarkMode(!isDarkMode);
-    document.documentElement.classList.toggle('dark');
+    setIsDarkMode(prev => !prev);
   };
 
   const fetchData = async () => {

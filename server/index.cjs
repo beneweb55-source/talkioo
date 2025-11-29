@@ -652,7 +652,11 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
                 uploadStream.end(req.file.buffer);
             });
             attachmentUrl = uploadResult.secure_url;
-            messageType = 'image';
+            
+            // IF client says it's audio, keep audio, otherwise default to image for files
+            if (messageType !== 'audio') {
+                messageType = 'image';
+            }
         } catch (error) { return res.status(500).json({ error: "Échec upload média." }); }
     }
 

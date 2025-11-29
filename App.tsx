@@ -375,6 +375,7 @@ const Dashboard = () => {
                 conversation={activeConversation} 
                 currentUser={user!} 
                 onlineUsers={onlineUsers} 
+                contacts={contacts} // PASS CONTACTS HERE
                 onBack={() => setActiveConversationId(null)} 
             />
         ) : (

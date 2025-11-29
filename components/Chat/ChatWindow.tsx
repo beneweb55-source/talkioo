@@ -1,12 +1,11 @@
-
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
-import { GroupManager } from '../Groups/GroupManager'; // Assuming this import exists or will be used by parent
+import { GroupManager } from '../Groups/GroupManager'; 
 
 const MotionDiv = motion.div as any;
 const MotionButton = motion.button as any;
@@ -16,9 +15,10 @@ interface ChatWindowProps {
   currentUser: User;
   onBack?: () => void;
   onlineUsers: Set<string>;
+  contacts: User[]; // New prop for adding members
 }
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUser, onBack, onlineUsers }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUser, onBack, onlineUsers, contacts }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -37,6 +37,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [isSending, setIsSending] = useState(false);
 
   const [showInputEmoji, setShowInputEmoji] = useState(false);
+  const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false); // New State for Group Manager
 
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
@@ -150,7 +151,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       const loadName = async () => {
         if (conversation.is_group) {
             setHeaderName(conversation.name || 'Groupe');
-            setHeaderAvatar(conversation.avatar_url || null); // Load Group Avatar
+            setHeaderAvatar(conversation.avatar_url || null);
             setOtherUserId(null);
         } else {
             const other = await getOtherParticipant(conversation.id, currentUser.id);
@@ -173,6 +174,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     setSelectedFile(null);
     setImagePreview(null);
     setIsSearchOpen(false);
+    setIsGroupInfoOpen(false); // Reset on conv change
     
     const fetchAndMark = async () => {
         try {
@@ -391,6 +393,24 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" 
              style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
 
+        {/* --- GROUP MANAGER OVERLAY --- */}
+        <AnimatePresence>
+            {isGroupInfoOpen && (
+                <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+                    <GroupManager 
+                        conversation={conversation}
+                        currentUser={currentUser}
+                        contacts={contacts}
+                        onClose={() => setIsGroupInfoOpen(false)}
+                        onUpdate={() => {
+                            // The backend emits socket events which update conversations/messages automatically.
+                            // We might just need to refresh if something doesn't sync perfectly, but for now we rely on socket.
+                        }}
+                    />
+                </div>
+            )}
+        </AnimatePresence>
+
         <div className="h-[70px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-gray-800/50 flex items-center justify-between px-4 z-20 shadow-sm flex-shrink-0">
             {isSearchOpen ? (
                 <div className="flex-1 flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
@@ -430,21 +450,31 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10">
                             <ArrowLeft size={22} />
                         </button>
-                        <div className="relative">
-                            <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
-                                {headerAvatar ? (
-                                    <img src={headerAvatar} alt={headerName} className="h-full w-full object-cover" />
-                                ) : (
-                                    conversation.is_group ? <Users size={20} /> : headerName?.charAt(0).toUpperCase()
-                                )}
+                        
+                        {/* Header Info - Clickable for Groups */}
+                        <div 
+                            className={`flex items-center gap-3 ${conversation.is_group ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
+                            onClick={() => conversation.is_group && setIsGroupInfoOpen(true)}
+                        >
+                            <div className="relative">
+                                <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
+                                    {headerAvatar ? (
+                                        <img src={headerAvatar} alt={headerName} className="h-full w-full object-cover" />
+                                    ) : (
+                                        conversation.is_group ? <Users size={20} /> : headerName?.charAt(0).toUpperCase()
+                                    )}
+                                </div>
+                                {isOnline && !conversation.is_group && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
                             </div>
-                            {isOnline && !conversation.is_group && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
-                        </div>
-                        <div>
-                            <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight">{headerName}</h2>
-                            <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">
-                                {conversation.is_group ? 'Groupe' : (isOnline ? 'En ligne' : 'Hors ligne')}
-                            </p>
+                            <div>
+                                <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight flex items-center gap-1">
+                                    {headerName}
+                                    {conversation.is_group && <Info size={12} className="text-gray-400"/>}
+                                </h2>
+                                <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">
+                                    {conversation.is_group ? 'Cliquez pour gérer' : (isOnline ? 'En ligne' : 'Hors ligne')}
+                                </p>
+                            </div>
                         </div>
                     </div>
                     <div className="flex gap-1 text-brand-600 dark:text-brand-400">

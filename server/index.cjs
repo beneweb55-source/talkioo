@@ -185,7 +185,7 @@ app.post('/api/auth/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
         const tag = Math.floor(1000 + Math.random() * 9000).toString();
         const result = await pool.query(
-            'INSERT INTO users (username, email, password_hash, tag) VALUES ($1, $2, $3, $4) RETURNING id, username, tag, email, created_at',
+            'INSERT INTO users (username, email, password_hash, tag) VALUES ($1, $2, $3, $4) RETURNING id, username, tag, email, created_at, avatar_url',
             [username.trim(), email.toLowerCase().trim(), hashedPassword, tag]
         );
         const user = result.rows[0];
@@ -214,14 +214,45 @@ app.get('/api/users/online', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/users/profile', authenticateToken, async (req, res) => {
+app.put('/api/users/profile', authenticateToken, upload.single('avatar'), async (req, res) => {
     const { username, email } = req.body;
+    
+    let avatarUrl = null;
+    
+    if (req.file) {
+        try {
+            const uploadResult = await new Promise((resolve, reject) => {
+                const uploadStream = cloudinary.uploader.upload_stream(
+                    {
+                        folder: `chat-app/avatars`,
+                        resource_type: "image",
+                        transformation: [{ width: 300, height: 300, crop: "fill", gravity: "face" }]
+                    },
+                    (error, result) => {
+                        if (error) reject(error);
+                        else resolve(result); 
+                    }
+                );
+                uploadStream.end(req.file.buffer);
+            });
+            avatarUrl = uploadResult.secure_url;
+        } catch (error) {
+            console.error('Avatar Upload Error:', error);
+            return res.status(500).json({ error: "Erreur upload avatar" });
+        }
+    }
+
     try {
         const result = await pool.query(
-            'UPDATE users SET username = COALESCE($1, username), email = COALESCE($2, email) WHERE id = $3 RETURNING id, username, tag, email, created_at',
-            [username, email, req.user.id]
+            'UPDATE users SET username = COALESCE($1, username), email = COALESCE($2, email), avatar_url = COALESCE($3, avatar_url) WHERE id = $4 RETURNING id, username, tag, email, created_at, avatar_url',
+            [username, email, avatarUrl, req.user.id]
         );
-        res.json(result.rows[0]);
+        const updatedUser = result.rows[0];
+        
+        // Broadcast profile update to all clients
+        io.emit('USER_PROFILE_UPDATE', updatedUser);
+        
+        res.json(updatedUser);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -240,7 +271,7 @@ app.put('/api/users/password', authenticateToken, async (req, res) => {
 
 app.get('/api/users/:id', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, username, tag, email, is_online FROM users WHERE id = $1', [req.params.id]);
+        const result = await pool.query('SELECT id, username, tag, email, is_online, avatar_url FROM users WHERE id = $1', [req.params.id]);
         res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -248,7 +279,7 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
 app.get('/api/contacts', authenticateToken, async (req, res) => {
     try {
         const query = `
-            SELECT u.id, u.username, u.tag, u.email, u.is_online, fr.status AS friend_status, c.id AS conversation_id
+            SELECT u.id, u.username, u.tag, u.email, u.is_online, u.avatar_url, fr.status AS friend_status, c.id AS conversation_id
             FROM friend_requests fr
             JOIN users u ON (CASE WHEN fr.sender_id = $1 THEN fr.receiver_id ELSE fr.sender_id END) = u.id
             LEFT JOIN participants p1 ON p1.user_id = fr.sender_id AND p1.conversation_id IN (
@@ -304,12 +335,13 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
             let displayName = row.name;
             if (!row.is_group) {
                 const otherPRes = await pool.query(`
-                    SELECT u.username, u.tag FROM participants p JOIN users u ON p.user_id = u.id 
+                    SELECT u.username, u.tag, u.avatar_url FROM participants p JOIN users u ON p.user_id = u.id 
                     WHERE p.conversation_id = $1 ORDER BY (p.user_id = $2) ASC LIMIT 1
                 `, [row.id, req.user.id]);
                 if (otherPRes.rows.length > 0) {
                     const u = otherPRes.rows[0];
                     displayName = `${u.username}#${u.tag}`;
+                    row.avatar_url = u.avatar_url; // Inject avatar for UI
                 } else { displayName = "Discussion"; }
             }
             return {
@@ -355,7 +387,7 @@ app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
 app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT json_build_object('id', u.id, 'username', u.username, 'tag', u.tag, 'email', u.email, 'is_online', u.is_online) as user_data
+            SELECT json_build_object('id', u.id, 'username', u.username, 'tag', u.tag, 'email', u.email, 'is_online', u.is_online, 'avatar_url', u.avatar_url) as user_data
             FROM participants p JOIN users u ON p.user_id = u.id 
             WHERE p.conversation_id = $1 ORDER BY (p.user_id = $2) ASC LIMIT 1
         `, [req.params.id, req.user.id]);
@@ -368,7 +400,7 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
         const result = await pool.query(`
             SELECT 
                 m.*, 
-                u.username, u.tag,
+                u.username, u.tag, u.avatar_url AS sender_avatar,
                 (SELECT COUNT(*) FROM message_reads mr WHERE mr.message_id = m.id AND mr.user_id != $2) AS read_count,
                 m2.content AS replied_to_content, u2.username AS replied_to_username, u2.tag AS replied_to_tag,
                 m2.message_type AS replied_to_type, m2.attachment_url AS replied_to_attachment_url,
@@ -469,7 +501,7 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
         await pool.query('INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [msg.id, senderId]);
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
 
-        const userRes = await pool.query('SELECT username, tag FROM users WHERE id = $1', [senderId]);
+        const userRes = await pool.query('SELECT username, tag, avatar_url FROM users WHERE id = $1', [senderId]);
         const sender = userRes.rows[0];
         
         let replyData = null;
@@ -485,6 +517,7 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
             content: msg.content === null ? "" : msg.content,
             created_at: msg.created_at,
             sender_username: `${sender.username}#${sender.tag}`, 
+            sender_avatar: sender.avatar_url,
             read_count: 0, 
             reply: replyData,
             message_type: messageType,
@@ -550,8 +583,8 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
 
 app.get('/api/friend_requests', authenticateToken, async (req, res) => {
     try {
-        const resQ = await pool.query(`SELECT r.*, u.username, u.tag, u.email FROM friend_requests r JOIN users u ON r.sender_id = u.id WHERE r.receiver_id = $1 AND r.status = 'pending'`, [req.user.id]);
-        res.json(resQ.rows.map(r => ({ ...r, sender: { id: r.sender_id, username: r.username, tag: r.tag, email: r.email } })));
+        const resQ = await pool.query(`SELECT r.*, u.username, u.tag, u.email, u.avatar_url FROM friend_requests r JOIN users u ON r.sender_id = u.id WHERE r.receiver_id = $1 AND r.status = 'pending'`, [req.user.id]);
+        res.json(resQ.rows.map(r => ({ ...r, sender: { id: r.sender_id, username: r.username, tag: r.tag, email: r.email, avatar_url: r.avatar_url } })));
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

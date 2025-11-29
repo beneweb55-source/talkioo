@@ -15,7 +15,6 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = 'super_secret_key_change_this_in_prod';
 
 // Configuration Cloudinary
-// Configuration Cloudinary (Lecture depuis les variables d'environnement Render)
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dz8b5k9wp',
   api_key: process.env.CLOUDINARY_API_KEY || '338861446288879',
@@ -39,8 +38,13 @@ const pool = new Pool({
 // --- HELPER FUNCTIONS ---
 const getAggregatedReactions = async (messageId) => {
     try {
-        // Retourne un tableau d'objets { emoji, user_id }
-        const res = await pool.query('SELECT emoji, user_id FROM message_reactions WHERE message_id = $1', [messageId]);
+        // Retourne un tableau d'objets { emoji, user_id, username }
+        const res = await pool.query(`
+            SELECT mr.emoji, mr.user_id, u.username 
+            FROM message_reactions mr 
+            JOIN users u ON mr.user_id = u.id
+            WHERE mr.message_id = $1
+        `, [messageId]);
         return res.rows;
     } catch (err) {
         console.error("Error aggregating reactions:", err);
@@ -126,21 +130,16 @@ app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     const { emoji } = req.body; 
 
-    console.log(`[DEBUG-REACTION] Réaction reçue pour message ${messageId} par ${userId} : ${emoji}`);
-
     try {
         // 1. Check if message exists and get conversation ID
         const msgCheck = await pool.query('SELECT conversation_id FROM messages WHERE id = $1', [messageId]);
         if (msgCheck.rows.length === 0) {
-            console.log(`[DEBUG-REACTION] Message ${messageId} not found`);
             return res.status(404).json({ error: "Message introuvable" });
         }
         const conversationId = msgCheck.rows[0].conversation_id;
 
         // 2. Handle Reaction Logic (Toggle Specific Emoji)
-        // Note: SQL Constraint is UNIQUE(message_id, user_id, emoji)
         if (!emoji) {
-            // Error handling or ignore
             return res.status(400).json({ error: "Emoji required" });
         } else {
             // Check if this specific user has already reacted with this specific emoji
@@ -154,7 +153,6 @@ app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
                 await pool.query('DELETE FROM message_reactions WHERE id = $1', [existing.rows[0].id]);
             } else {
                 // Doesn't exist -> Insert it (Toggle ON)
-                // Use ON CONFLICT DO NOTHING just in case of race condition
                 await pool.query(
                     'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', 
                     [messageId, userId, emoji]
@@ -177,8 +175,6 @@ app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
         res.status(500).json({ error: "Erreur serveur réaction" });
     }
 });
-
-console.log("[SERVER STARTUP] Route Reactions is ACTIVE.");
 
 app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
 
@@ -215,6 +211,30 @@ app.get('/api/users/online', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id FROM users WHERE is_online = TRUE');
         res.json(result.rows.map(u => u.id));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/users/profile', authenticateToken, async (req, res) => {
+    const { username, email } = req.body;
+    try {
+        const result = await pool.query(
+            'UPDATE users SET username = COALESCE($1, username), email = COALESCE($2, email) WHERE id = $3 RETURNING id, username, tag, email, created_at',
+            [username, email, req.user.id]
+        );
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/users/password', authenticateToken, async (req, res) => {
+    const { oldPassword, newPassword } = req.body;
+    try {
+        const userRes = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+        if (userRes.rows.length === 0) return res.status(404).json({ error: "Utilisateur non trouvé" });
+        const valid = await bcrypt.compare(oldPassword, userRes.rows[0].password_hash);
+        if (!valid) return res.status(400).json({ error: "Ancien mot de passe incorrect" });
+        const hashed = await bcrypt.hash(newPassword, 10);
+        await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashed, req.user.id]);
+        res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -353,8 +373,9 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
                 m2.content AS replied_to_content, u2.username AS replied_to_username, u2.tag AS replied_to_tag,
                 m2.message_type AS replied_to_type, m2.attachment_url AS replied_to_attachment_url,
                 (
-                    SELECT json_agg(json_build_object('emoji', mr.emoji, 'user_id', mr.user_id))
+                    SELECT json_agg(json_build_object('emoji', mr.emoji, 'user_id', mr.user_id, 'username', u_react.username))
                     FROM message_reactions mr
+                    JOIN users u_react ON mr.user_id = u_react.id
                     WHERE mr.message_id = m.id
                 ) as reactions
             FROM messages m

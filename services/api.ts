@@ -1,4 +1,5 @@
 
+
 import { io, Socket } from 'socket.io-client';
 import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction, GroupMember } from '../types';
 
@@ -170,6 +171,12 @@ export const leaveGroup = async (id: string): Promise<void> => {
     });
 };
 
+export const destroyGroup = async (id: string): Promise<void> => {
+    return await fetchWithAuth(`/conversations/${id}/destroy`, { 
+        method: 'DELETE' 
+    });
+};
+
 export const deleteConversationAPI = async (conversationId: string, userId: string): Promise<boolean> => {
     try { await fetchWithAuth(`/conversations/${conversationId}`, { method: 'DELETE' }); return true; } catch (e) { return false; }
 };
@@ -187,7 +194,7 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
     return await fetchWithAuth(`/conversations/${conversationId}/messages`);
 };
 
-export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image' = 'text', file?: File): Promise<Message> => {
+export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image'|'gif' = 'text', file?: File, attachmentUrl?: string): Promise<Message> => {
     
     if (file) {
         // Validation Size (Double check client-side)
@@ -207,10 +214,26 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
                 conversation_id: conversationId, 
                 content: content || "", 
                 replied_to_message_id: repliedToId,
-                message_type: 'text'
+                message_type: messageType, // Use the provided type (text, image, gif)
+                attachment_url: attachmentUrl // Optional manual URL (for GIFs)
             }) 
         });
     }
+};
+
+// --- GIFS ---
+export const getTrendingGifsAPI = async (pos?: string) => {
+    let url = '/gifs/trending';
+    if (pos) url += `?pos=${pos}`;
+    const data = await fetchWithAuth(url);
+    return data;
+};
+
+export const searchGifsAPI = async (query: string, pos?: string) => {
+    let url = `/gifs/search?q=${encodeURIComponent(query)}`;
+    if (pos) url += `&pos=${pos}`;
+    const data = await fetchWithAuth(url);
+    return data;
 };
 
 // --- REACTIONS ---

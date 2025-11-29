@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Conversation, User, GroupMember } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { updateGroup, addMembers, removeMember, leaveGroup, getGroupMembers } from '../../services/api';
+import { updateGroup, addMembers, removeMember, leaveGroup, getGroupMembers, destroyGroup } from '../../services/api';
 import { Users, UserPlus, Trash2, LogOut, Settings, Camera, Crown, ShieldAlert, X, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -20,7 +20,7 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
   conversation, 
   currentUser, 
   onClose, 
-  onUpdate,
+  onUpdate, 
   contacts 
 }) => {
   const [activeTab, setActiveTab] = useState<'info' | 'members'>('info');
@@ -97,6 +97,14 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
     } catch (error) { console.error(error); }
   };
 
+  const handleDestroyGroup = async () => {
+      if (!window.confirm("ATTENTION : Cela supprimera définitivement le groupe et tous les messages pour tout le monde. Continuer ?")) return;
+      try {
+          await destroyGroup(conversation.id);
+          onClose();
+      } catch (error) { console.error(error); }
+  };
+
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-800 relative">
       <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
@@ -143,10 +151,15 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
               Enregistrer les modifications
             </Button>
             
-            <div className="pt-4 border-t border-gray-100 dark:border-gray-800">
-                <Button type="button" variant="danger" onClick={handleLeaveGroup} className="w-full flex items-center justify-center gap-2">
+            <div className="pt-4 border-t border-gray-100 dark:border-gray-800 space-y-2">
+                <Button type="button" variant="ghost" onClick={handleLeaveGroup} className="w-full flex items-center justify-center gap-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
                     <LogOut size={16} /> Quitter le groupe
                 </Button>
+                {isAdmin && (
+                    <Button type="button" variant="danger" onClick={handleDestroyGroup} className="w-full flex items-center justify-center gap-2">
+                        <Trash2 size={16} /> Supprimer le groupe (Admin)
+                    </Button>
+                )}
             </div>
         </form>
       ) : (
@@ -168,7 +181,7 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
                                     <div className={`w-4 h-4 border rounded flex items-center justify-center ${selectedContacts.includes(contact.id) ? 'bg-brand-500 border-brand-500 text-white' : 'border-gray-400'}`}>
                                         {selectedContacts.includes(contact.id) && <Check size={12} />}
                                     </div>
-                                    {contact.username}
+                                    {contact.username} <span className="text-gray-500 text-xs ml-1">#{contact.tag}</span>
                                 </div>
                             ))}
                         </div>

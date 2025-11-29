@@ -247,7 +247,10 @@ const Dashboard = () => {
                                             <div className={`w-5 h-5 rounded border mr-3 flex items-center justify-center transition-colors ${selectedContacts.includes(contact.id) ? 'bg-brand-500 border-brand-500 text-white' : 'border-gray-300 dark:border-gray-600'}`}>
                                                 {selectedContacts.includes(contact.id) && <Check size={14} />}
                                             </div>
-                                            <span className="dark:text-gray-200 text-sm">{contact.username}</span>
+                                            <span className="dark:text-gray-200 text-sm">
+                                                {contact.username}
+                                                <span className="text-gray-500 text-xs ml-1">#{contact.tag}</span>
+                                            </span>
                                         </div>
                                     ))}
                                 </div>

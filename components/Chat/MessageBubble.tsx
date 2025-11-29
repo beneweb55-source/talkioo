@@ -139,9 +139,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   const safeContent = message.content || "";
   const attachmentUrl = message.attachment_url || message.image_url;
   const isLegacyBase64 = safeContent.startsWith('data:image');
-  const isImage = !!attachmentUrl || isLegacyBase64 || message.message_type === 'image';
+  const isMedia = !!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif';
   
-  const jumboClass = !isImage && !isDeleted ? getJumboEmojiClass(safeContent) : null;
+  const jumboClass = !isMedia && !isDeleted ? getJumboEmojiClass(safeContent) : null;
 
   const reactionData: { [emoji: string]: { count: number, hasReacted: boolean, users: string[] } } = {};
   let hasReactions = false;
@@ -237,12 +237,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                         <Plus size={18} />
                     </MotionButton>
 
-                    {/* PC Specific Context Actions inside Menu */}
-                    <div className="hidden md:flex items-center gap-1 border-l border-gray-200 dark:border-gray-700 pl-1 ml-1">
+                    {/* Context Actions inside Menu - Visible on Mobile AND PC now */}
+                    <div className="flex items-center gap-1 border-l border-gray-200 dark:border-gray-700 pl-1 ml-1">
                         {onReply && (
                             <button onClick={() => { onReply(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-brand-500 text-gray-400"><Reply size={15}/></button>
                         )}
-                        {isOwn && onEdit && !isImage && (
+                        {isOwn && onEdit && !isMedia && (
                              <button onClick={() => { onEdit(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-blue-500 text-gray-400"><Pencil size={14}/></button>
                         )}
                         {isOwn && onDelete && (
@@ -271,19 +271,41 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
             )}
           </AnimatePresence>
 
-          {/* PC Hover Trigger Button */}
+          {/* PC Hover Actions Toolbar (Edit/Delete/Reply/React) */}
           {!isDeleted && !showReactionMenu && (
-             <button
-                onClick={(e) => { e.stopPropagation(); setShowReactionMenu(true); }}
+             <div
                 className={`
-                    hidden md:flex absolute top-2 opacity-0 group-hover:opacity-100 transition-all duration-200
-                    p-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-400 hover:text-brand-500 shadow-sm border border-gray-200 dark:border-gray-700
-                    ${isOwn ? '-left-10' : '-right-10'}
+                    hidden md:flex absolute top-0 bottom-0 items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 px-2
+                    ${isOwn ? 'right-full mr-2' : 'left-full ml-2'}
                 `}
-                title="Ajouter une réaction"
+                onClick={(e) => e.stopPropagation()}
              >
-                <Smile size={16} />
-             </button>
+                 {onReply && (
+                    <button onClick={(e) => { e.stopPropagation(); onReply(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-brand-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Répondre">
+                        <Reply size={16} />
+                    </button>
+                 )}
+                 
+                 {isOwn && onEdit && !isMedia && (
+                    <button onClick={(e) => { e.stopPropagation(); onEdit(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-blue-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Modifier">
+                        <Pencil size={16} />
+                    </button>
+                 )}
+
+                 {isOwn && onDelete && (
+                    <button onClick={(e) => { e.stopPropagation(); onDelete(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-red-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Supprimer">
+                        <Trash2 size={16} />
+                    </button>
+                 )}
+
+                 <button
+                    onClick={(e) => { e.stopPropagation(); setShowReactionMenu(true); }}
+                    className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-yellow-400 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm"
+                    title="Réagir"
+                 >
+                    <Smile size={16} />
+                 </button>
+             </div>
           )}
 
           {message.reply && !isDeleted && !jumboClass && (
@@ -306,15 +328,15 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   <span className="flex items-center gap-1.5 text-sm opacity-80"><Trash2 size={12}/> Message supprimé</span>
               ) : (
                   <>
-                      {isImage && (
-                          <div className={`my-1 mb-2 relative w-full bg-gray-100 dark:bg-gray-800/50 rounded-lg overflow-hidden flex items-center justify-center min-h-[200px]`}>
+                      {isMedia && (
+                          <div className={`my-1 mb-2 relative w-full bg-gray-100 dark:bg-gray-800/50 rounded-lg overflow-hidden flex items-center justify-center min-h-[150px]`}>
                              {!imgLoaded && !imgError && (
                                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-100/50 dark:bg-gray-800/50 backdrop-blur-[2px]">
                                     <Loader2 className="animate-spin text-brand-500" size={32} />
                                 </div>
                              )}
                              {imgError ? (
-                                <div className="flex flex-col items-center justify-center text-red-500 gap-2 p-4 w-full h-full min-h-[200px] bg-red-50 dark:bg-red-900/10">
+                                <div className="flex flex-col items-center justify-center text-red-500 gap-2 p-4 w-full h-full min-h-[150px] bg-red-50 dark:bg-red-900/10">
                                     <AlertTriangle size={24} />
                                     <span className="text-xs font-medium">Image non disponible</span>
                                 </div>
@@ -322,8 +344,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                                 attachmentUrl ? (
                                     <img 
                                         src={attachmentUrl} 
-                                        alt="Image envoyée" 
-                                        className="relative z-10 w-full h-auto max-h-[400px] object-cover rounded-lg cursor-pointer min-h-[200px] block"
+                                        alt="Media" 
+                                        className="relative z-10 w-full h-auto max-h-[400px] object-cover rounded-lg cursor-pointer min-h-[150px] block"
                                         onClick={() => window.open(attachmentUrl, '_blank')}
                                         onLoad={() => setImgLoaded(true)}
                                         onError={() => { setImgError(true); setImgLoaded(true); }}
@@ -332,9 +354,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                                     isLegacyBase64 ? (
                                         <img src={safeContent} alt="legacy" className="rounded-lg max-w-full" onLoad={() => setImgLoaded(true)} />
                                     ) : (
-                                        <div className="flex flex-col items-center justify-center text-gray-400 gap-2 p-4 w-full min-h-[200px]">
+                                        <div className="flex flex-col items-center justify-center text-gray-400 gap-2 p-4 w-full min-h-[150px]">
                                             <ImageIcon size={32} className="opacity-50" />
-                                            <span className="text-xs">Chargement de l'image...</span>
+                                            <span className="text-xs">Chargement...</span>
                                         </div>
                                     )
                                 )

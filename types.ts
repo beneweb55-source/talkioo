@@ -54,7 +54,7 @@ export interface Message {
   sender_username?: string;
   sender_avatar?: string;
   read_count?: number;
-  message_type?: 'text' | 'image' | 'video' | 'audio';
+  message_type?: 'text' | 'image' | 'video' | 'audio' | 'gif';
   attachment_url?: string;
   image_url?: string; // Fallback for backward compatibility
   reactions?: Reaction[]; // New: List of reactions

@@ -123,6 +123,49 @@ const authenticateToken = (req, res, next) => {
 
 // --- ROUTES ---
 
+// GIFS (TENOR PROXY)
+app.get('/api/gifs/search', async (req, res) => {
+    const { q, pos } = req.query;
+    const apiKey = process.env.TENOR_API_KEY;
+    const clientKey = "talkio_app";
+    const limit = 20;
+
+    if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" });
+
+    try {
+        let url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=${apiKey}&client_key=${clientKey}&limit=${limit}&media_filter=minimal`;
+        if (pos) url += `&pos=${pos}`;
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        res.json(data);
+    } catch (error) {
+        console.error("Tenor Search Error:", error);
+        res.status(500).json({ error: "Failed to fetch GIFs" });
+    }
+});
+
+app.get('/api/gifs/trending', async (req, res) => {
+    const { pos } = req.query;
+    const apiKey = process.env.TENOR_API_KEY;
+    const clientKey = "talkio_app";
+    const limit = 20;
+
+    if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" });
+
+    try {
+        let url = `https://tenor.googleapis.com/v2/featured?key=${apiKey}&client_key=${clientKey}&limit=${limit}&media_filter=minimal`;
+        if (pos) url += `&pos=${pos}`;
+
+        const response = await fetch(url);
+        const data = await response.json();
+        res.json(data);
+    } catch (error) {
+         console.error("Tenor Trending Error:", error);
+         res.status(500).json({ error: "Failed to fetch GIFs" });
+    }
+});
+
 // REACTIONS
 app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
     const messageId = req.params.id;
@@ -246,8 +289,9 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
 
 app.get('/api/contacts', authenticateToken, async (req, res) => {
     try {
+        // DISTINCT ON (u.id) prevents duplicate contacts if multiple paths exist
         const query = `
-            SELECT u.id, u.username, u.tag, u.email, u.is_online, u.avatar_url, fr.status AS friend_status, c.id AS conversation_id
+            SELECT DISTINCT ON (u.id) u.id, u.username, u.tag, u.email, u.is_online, u.avatar_url, fr.status AS friend_status, c.id AS conversation_id
             FROM friend_requests fr
             JOIN users u ON (CASE WHEN fr.sender_id = $1 THEN fr.receiver_id ELSE fr.sender_id END) = u.id
             LEFT JOIN participants p1 ON p1.user_id = fr.sender_id AND p1.conversation_id IN (
@@ -255,6 +299,7 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
             )
             LEFT JOIN conversations c ON c.id = p1.conversation_id AND c.is_group = FALSE
             WHERE (fr.sender_id = $1 OR fr.receiver_id = $1) AND fr.status = 'accepted'
+            ORDER BY u.id
         `;
         const result = await pool.query(query, [req.user.id]);
         res.json(result.rows);
@@ -367,6 +412,29 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
 app.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
     try {
         await pool.query('UPDATE participants SET last_deleted_at = NOW() WHERE conversation_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ADMIN: Destroy Group (Hard Delete for everyone)
+app.delete('/api/conversations/:id/destroy', authenticateToken, async (req, res) => {
+    const conversationId = req.params.id;
+    try {
+        // Verify admin rights
+        const adminCheck = await pool.query('SELECT role FROM participants WHERE conversation_id = $1 AND user_id = $2', [conversationId, req.user.id]);
+        if (adminCheck.rows.length === 0 || adminCheck.rows[0].role !== 'admin') {
+            return res.status(403).json({ error: "Seuls les admins peuvent supprimer le groupe." });
+        }
+
+        // Notify participants before deletion
+        const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversationId]);
+        pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_removed', { conversationId }));
+
+        // Delete (Cascade handles participants/messages usually, but doing manual just in case)
+        await pool.query('DELETE FROM messages WHERE conversation_id = $1', [conversationId]);
+        await pool.query('DELETE FROM participants WHERE conversation_id = $1', [conversationId]);
+        await pool.query('DELETE FROM conversations WHERE id = $1', [conversationId]);
+
         res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -536,9 +604,10 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
     
     let content = req.body.content;
     if (!content || content === 'undefined' || content === 'null') content = '';
-
-    let attachmentUrl = null;
-    let messageType = 'text';
+    
+    // NEW: Handle GIF URL or explicit attachment URL passed from frontend
+    let attachmentUrl = req.body.attachment_url || null;
+    let messageType = req.body.message_type || 'text';
 
     if (req.file) {
         try {
@@ -655,10 +724,26 @@ app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res)
     try {
         const rRes = await pool.query('UPDATE friend_requests SET status = $1 WHERE id = $2 RETURNING *', [status, req.params.id]);
         const reqData = rRes.rows[0];
+        
         if (status === 'accepted') {
-            const cRes = await pool.query('INSERT INTO conversations (is_group) VALUES (false) RETURNING id');
-            const cid = cRes.rows[0].id;
-            await pool.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2), ($3, $2)', [reqData.sender_id, cid, reqData.receiver_id]);
+            // Check existing conversation
+            const exist = await pool.query(`
+                SELECT c.id FROM conversations c
+                JOIN participants p1 ON c.id = p1.conversation_id
+                JOIN participants p2 ON c.id = p2.conversation_id
+                WHERE c.is_group = FALSE AND p1.user_id = $1 AND p2.user_id = $2
+            `, [reqData.sender_id, reqData.receiver_id]);
+
+            let cid;
+            if (exist.rows.length > 0) {
+                cid = exist.rows[0].id;
+                await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [cid]);
+            } else {
+                const cRes = await pool.query('INSERT INTO conversations (is_group) VALUES (false) RETURNING id');
+                cid = cRes.rows[0].id;
+                await pool.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2), ($3, $2)', [reqData.sender_id, cid, reqData.receiver_id]);
+            }
+            
             await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [cid, reqData.receiver_id, '👋 Ami accepté !']);
             io.to(`user:${reqData.sender_id}`).emit('conversation_added', { conversationId: cid });
             io.to(`user:${reqData.receiver_id}`).emit('conversation_added', { conversationId: cid });

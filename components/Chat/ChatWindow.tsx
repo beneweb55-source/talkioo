@@ -2,10 +2,11 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
 import { GroupManager } from '../Groups/GroupManager'; 
+import { GifPicker } from './GifPicker';
 
 const MotionDiv = motion.div as any;
 const MotionButton = motion.button as any;
@@ -37,7 +38,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [isSending, setIsSending] = useState(false);
 
   const [showInputEmoji, setShowInputEmoji] = useState(false);
-  const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false); // New State for Group Manager
+  const [showGifPicker, setShowGifPicker] = useState(false); // NEW STATE
+  const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false); 
 
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
@@ -47,6 +49,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const gifPickerRef = useRef<HTMLDivElement>(null); // NEW REF
   
   const isInsertingEmojiRef = useRef(false);
 
@@ -120,6 +123,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             !(event.target as Element).closest('.emoji-toggle-btn')) {
             setShowInputEmoji(false);
         }
+        if (gifPickerRef.current && !gifPickerRef.current.contains(event.target as Node) && 
+            !(event.target as Element).closest('.gif-toggle-btn')) {
+            setShowGifPicker(false);
+        }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -142,6 +149,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const handleInputFocus = () => {
       if (!isInsertingEmojiRef.current) {
           setShowInputEmoji(false);
+          setShowGifPicker(false);
       }
       setTimeout(() => scrollToBottom('auto'), 100);
       setTimeout(() => scrollToBottom('auto'), 300);
@@ -174,7 +182,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     setSelectedFile(null);
     setImagePreview(null);
     setIsSearchOpen(false);
-    setIsGroupInfoOpen(false); // Reset on conv change
+    setIsGroupInfoOpen(false); 
     
     const fetchAndMark = async () => {
         try {
@@ -266,6 +274,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     }, 10);
   };
 
+  const handleGifSelect = async (gifUrl: string) => {
+      setShowGifPicker(false);
+      try {
+          await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'gif', undefined, gifUrl);
+          // Optimistic update handled by socket subscription mostly, but we can add temp if needed
+      } catch (err) { console.error("GIF send error", err); }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -312,6 +328,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     
     setIsSending(true);
     setShowInputEmoji(false);
+    setShowGifPicker(false);
     
     if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
@@ -402,10 +419,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         currentUser={currentUser}
                         contacts={contacts}
                         onClose={() => setIsGroupInfoOpen(false)}
-                        onUpdate={() => {
-                            // The backend emits socket events which update conversations/messages automatically.
-                            // We might just need to refresh if something doesn't sync perfectly, but for now we rely on socket.
-                        }}
+                        onUpdate={() => {}}
                     />
                 </div>
             )}
@@ -539,6 +553,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         />
                     </MotionDiv>
                 )}
+                {showGifPicker && (
+                    <MotionDiv 
+                        ref={gifPickerRef}
+                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                        className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
+                        style={{ width: 'min(350px, 90vw)', height: '400px' }}
+                    >
+                        <GifPicker onSelect={handleGifSelect} />
+                    </MotionDiv>
+                )}
             </AnimatePresence>
 
             <AnimatePresence>
@@ -579,8 +605,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
             <div className="flex items-end gap-2 px-2 pb-2">
                 <div className="flex-shrink-0 mb-1 flex gap-2">
-                     <button onClick={() => setShowInputEmoji(!showInputEmoji)} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                     <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                         <Smile size={24} />
+                     </button>
+                     <button onClick={() => { setShowGifPicker(!showGifPicker); setShowInputEmoji(false); }} className={`gif-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showGifPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                        <StickyNote size={24} />
                      </button>
                     <button onClick={() => fileInputRef.current?.click()} className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${selectedFile ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                         <Image size={24} />

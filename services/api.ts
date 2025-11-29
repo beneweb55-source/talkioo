@@ -101,18 +101,23 @@ export const getOnlineUsersAPI = async (): Promise<string[]> => {
 };
 
 // --- PROFILE ---
-export const updateProfileAPI = async (data: { username?: string; email?: string }): Promise<User> => {
-    return await fetchWithAuth('/users/profile', { method: 'PUT', body: JSON.stringify(data) });
+export const updateProfileAPI = async (data: { username?: string; email?: string, avatar?: File | null }): Promise<User> => {
+    if (data.avatar) {
+        const formData = new FormData();
+        if (data.username) formData.append('username', data.username);
+        if (data.email) formData.append('email', data.email);
+        formData.append('avatar', data.avatar);
+        return await fetchWithAuth('/users/profile', { method: 'PUT', body: formData });
+    } else {
+        return await fetchWithAuth('/users/profile', { 
+            method: 'PUT', 
+            body: JSON.stringify({ username: data.username, email: data.email }) 
+        });
+    }
 };
 
 export const updatePasswordAPI = async (data: { oldPassword: string, newPassword: string }): Promise<void> => {
     return await fetchWithAuth('/users/password', { method: 'PUT', body: JSON.stringify(data) });
-};
-
-export const updateAvatarAPI = async (file: File): Promise<{ avatarUrl: string }> => {
-    const formData = new FormData();
-    formData.append('avatar', file);
-    return await fetchWithAuth('/users/avatar', { method: 'POST', body: formData });
 };
 
 // --- CONVERSATIONS & GROUPS ---
@@ -321,6 +326,13 @@ export const subscribeToUserStatus = (onStatusChange: (userId: string, isOnline:
     };
     socket.on('USER_STATUS_UPDATE', handler);
     return () => socket.off('USER_STATUS_UPDATE', handler);
+};
+
+export const subscribeToUserProfileUpdates = (onUpdate: (user: User) => void) => {
+    if (!socket) return () => {};
+    const handler = (data: User) => onUpdate(data);
+    socket.on('USER_PROFILE_UPDATE', handler);
+    return () => socket.off('USER_PROFILE_UPDATE', handler);
 };
 
 export const subscribeToFriendRequests = (userId: string, onNewRequest: () => void) => {

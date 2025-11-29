@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { updateProfileAPI, updatePasswordAPI } from '../../services/api';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X } from 'lucide-react';
+import { X, Camera } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -19,11 +19,23 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const [username, setUsername] = useState(user?.username || '');
   const [email, setEmail] = useState(user?.email || '');
   
+  const [selectedAvatar, setSelectedAvatar] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(user?.avatar_url || null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files && e.target.files[0]) {
+          const file = e.target.files[0];
+          setSelectedAvatar(file);
+          setAvatarPreview(URL.createObjectURL(file));
+      }
+  };
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,7 +43,11 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
     setMessage(null);
     try {
       // Correction: Call with single argument (data object)
-      const updatedUser = await updateProfileAPI({ username, email });
+      const updatedUser = await updateProfileAPI({ 
+          username, 
+          email,
+          avatar: selectedAvatar // Envoi du fichier si présent
+      });
       
       // Update context if successful
       if (updatedUser) {
@@ -39,6 +55,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
           login(updatedUser, currentToken);
       }
       setMessage({ text: "Profil mis à jour avec succès !", type: 'success' });
+      setSelectedAvatar(null); // Reset selection
     } catch (err: any) {
       setMessage({ text: err.message || "Erreur lors de la mise à jour", type: 'error' });
     } finally {
@@ -70,10 +87,25 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       </button>
       
       <div className="flex flex-col items-center mb-6">
-        <div className="relative group">
-            <div className="h-20 w-20 bg-gradient-to-tr from-brand-400 to-brand-600 rounded-full flex items-center justify-center text-white text-3xl font-bold shadow-lg">
-                {user?.username?.charAt(0).toUpperCase()}
+        <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+            <div className="h-24 w-24 bg-gradient-to-tr from-brand-400 to-brand-600 rounded-full flex items-center justify-center text-white text-3xl font-bold shadow-lg overflow-hidden border-4 border-white dark:border-gray-800">
+                {avatarPreview ? (
+                    <img src={avatarPreview} alt="Avatar" className="w-full h-full object-cover" />
+                ) : (
+                    user?.username?.charAt(0).toUpperCase()
+                )}
             </div>
+            {/* Overlay Edit Icon */}
+            <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <Camera className="text-white" size={24} />
+            </div>
+            <input 
+                type="file" 
+                ref={fileInputRef} 
+                className="hidden" 
+                accept="image/*"
+                onChange={handleAvatarChange}
+            />
         </div>
         <h2 className="mt-3 text-xl font-bold dark:text-white">{user?.username}</h2>
         <span className="text-sm text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded">#{user?.tag}</span>

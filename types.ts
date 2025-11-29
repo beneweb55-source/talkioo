@@ -4,6 +4,7 @@ export interface User {
   tag: string; // ex: 1234
   email: string;
   created_at: string;
+  avatar_url?: string | null; // URL de la photo de profil
 }
 
 export interface GroupMember {

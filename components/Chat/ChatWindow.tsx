@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates } from '../../services/api';
+import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
 import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -21,6 +21,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [headerName, setHeaderName] = useState('');
+  const [headerAvatar, setHeaderAvatar] = useState<string | null>(null);
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
   
   // Search State
@@ -147,14 +148,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       const loadName = async () => {
         if (conversation.is_group) {
             setHeaderName(conversation.name || 'Groupe');
+            setHeaderAvatar(null);
             setOtherUserId(null);
         } else {
             const other = await getOtherParticipant(conversation.id, currentUser.id);
             if (other) {
                 setHeaderName(`${other.username}#${other.tag}`);
+                setHeaderAvatar(other.avatar_url || null);
                 setOtherUserId(other.id);
             } else {
                 setHeaderName('Inconnu');
+                setHeaderAvatar(null);
             }
         }
       };
@@ -218,8 +222,23 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     
     const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => getMessagesAPI(conversation.id).then(setMessages));
 
-    return () => { unsubscribeMsgs(); unsubscribeTyping(); unsubscribeReads(); unsubscribeReactions(); };
-  }, [conversation.id, currentUser.id]);
+    const unsubscribeProfile = subscribeToUserProfileUpdates((updatedUser) => {
+        // Update Header
+        if (otherUserId === updatedUser.id) {
+            setHeaderName(`${updatedUser.username}#${updatedUser.tag}`);
+            setHeaderAvatar(updatedUser.avatar_url || null);
+        }
+        // Update Messages
+        setMessages(prev => prev.map(m => {
+            if (m.sender_id === updatedUser.id) {
+                return { ...m, sender_username: `${updatedUser.username}#${updatedUser.tag}` };
+            }
+            return m;
+        }));
+    });
+
+    return () => { unsubscribeMsgs(); unsubscribeTyping(); unsubscribeReads(); unsubscribeReactions(); unsubscribeProfile(); };
+  }, [conversation.id, currentUser.id, otherUserId]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setInputText(e.target.value);
@@ -413,8 +432,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                             <ArrowLeft size={22} />
                         </button>
                         <div className="relative">
-                            <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md">
-                                {headerName?.charAt(0).toUpperCase()}
+                            <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
+                                {headerAvatar ? (
+                                    <img src={headerAvatar} alt={headerName} className="h-full w-full object-cover" />
+                                ) : (
+                                    headerName?.charAt(0).toUpperCase()
+                                )}
                             </div>
                             {isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
                         </div>

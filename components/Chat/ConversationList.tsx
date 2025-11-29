@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Conversation, User } from '../../types';
-import { getOtherParticipant } from '../../services/api';
+import { getOtherParticipant, subscribeToUserProfileUpdates } from '../../services/api';
 import { Users, User as UserIcon, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -74,6 +74,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 
 const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onlineUsers }: any) => {
     const [name, setName] = useState(conv.name || 'Chargement...');
+    const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
     const [otherUserId, setOtherUserId] = useState<string | null>(null);
 
     useEffect(() => {
@@ -81,16 +82,19 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
             if (conv.is_group) {
                 setName(conv.name);
             } else {
-                // If the name from props is already a "User#1234" format (backend optimization), use it
+                // Initial setup from props if available (backend optimization)
                 if (conv.name && conv.name.includes('#')) {
                     setName(conv.name);
-                    // We still might want the ID for online status though...
-                    // Ideally backend sends other_participant_id
-                } 
+                }
+                if (conv.avatar_url) {
+                    setAvatarUrl(conv.avatar_url);
+                }
                 
+                // Fetch full participant info if not fully populated
                 const other = await getOtherParticipant(conv.id, currentUser.id);
                 if (other) {
                     setName(`${other.username}#${other.tag}`);
+                    setAvatarUrl(other.avatar_url || null);
                     setOtherUserId(other.id);
                 } else {
                     if (!conv.name || !conv.name.includes('#')) setName('Utilisateur Inconnu');
@@ -99,6 +103,18 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
         };
         fetchName();
     }, [conv, currentUser]);
+
+    // Listen for profile updates to update name/avatar instantly
+    useEffect(() => {
+        if (!otherUserId) return;
+        const unsub = subscribeToUserProfileUpdates((updatedUser) => {
+            if (updatedUser.id === otherUserId) {
+                 setName(`${updatedUser.username}#${updatedUser.tag}`);
+                 setAvatarUrl(updatedUser.avatar_url || null);
+            }
+        });
+        return () => unsub();
+    }, [otherUserId]);
 
     const isOnline = otherUserId && onlineUsers.has(otherUserId);
 
@@ -125,12 +141,16 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
             <div className="flex items-center gap-3 overflow-hidden relative z-10 w-full pr-14">
                 <div className="relative flex-shrink-0">
                     <div className={`
-                        h-12 w-12 rounded-full flex items-center justify-center text-lg font-bold shadow-sm
+                        h-12 w-12 rounded-full flex items-center justify-center text-lg font-bold shadow-sm overflow-hidden
                         ${isActive 
                             ? 'bg-white/20 text-white backdrop-blur-sm' 
                             : 'bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800 text-gray-600 dark:text-gray-300'}
                     `}>
-                        {conv.is_group ? <Users size={20} /> : name.charAt(0).toUpperCase()}
+                        {avatarUrl && !conv.is_group ? (
+                            <img src={avatarUrl} alt={name} className="h-full w-full object-cover" />
+                        ) : (
+                            conv.is_group ? <Users size={20} /> : name.charAt(0).toUpperCase()
+                        )}
                     </div>
                     {isOnline && !conv.is_group && (
                         <span className={`absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 ${isActive ? 'border-brand-500' : 'border-white dark:border-gray-900'}`}></span>

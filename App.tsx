@@ -9,7 +9,7 @@ import {
   getConversationsAPI, deleteConversationAPI, sendFriendRequestAPI, 
   getIncomingFriendRequestsAPI, respondToFriendRequestAPI, subscribeToFriendRequests, 
   subscribeToConversationsList, getContactsAPI, createGroupConversationAPI, 
-  getOnlineUsersAPI, subscribeToUserStatus
+  getOnlineUsersAPI, subscribeToUserStatus, subscribeToUserProfileUpdates
 } from './services/api';
 import { usePushNotifications } from './hooks/usePushNotifications';
 import { MessageCircle, UserPlus, Bell, Search, Users, User as UserIcon, Moon, Sun, LogOut, Check, X, RefreshCw, Copy } from 'lucide-react';
@@ -90,7 +90,14 @@ const Dashboard = () => {
         });
     });
 
-    return () => { unsubReq(); unsubConv(); unsubStatus(); };
+    const unsubProfile = subscribeToUserProfileUpdates((updatedUser) => {
+        // Update local contact list if present
+        setContacts(prev => prev.map(c => c.id === updatedUser.id ? { ...c, ...updatedUser } : c));
+        // Refresh conversations to update names if necessary
+        fetchData();
+    });
+
+    return () => { unsubReq(); unsubConv(); unsubStatus(); unsubProfile(); };
   }, [user, token]);
 
   const handleCreateGroup = async (e: React.FormEvent) => {

@@ -320,6 +320,50 @@ app.get('/api/users/:id', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- BLOCKING & FRIENDS ---
+
+app.post('/api/users/block', authenticateToken, async (req, res) => {
+    const { userId } = req.body;
+    if (!userId || userId === req.user.id) return res.status(400).json({ error: "Invalid User" });
+    try {
+        await pool.query('INSERT INTO blocked_users (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [req.user.id, userId]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/users/unblock', authenticateToken, async (req, res) => {
+    const { userId } = req.body;
+    try {
+        await pool.query('DELETE FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2', [req.user.id, userId]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/users/blocked', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT u.id, u.username, u.tag, u.avatar_url 
+            FROM blocked_users b 
+            JOIN users u ON b.blocked_id = u.id 
+            WHERE b.blocker_id = $1
+        `, [req.user.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/friends/:friendId', authenticateToken, async (req, res) => {
+    const friendId = req.params.friendId;
+    const userId = req.user.id;
+    try {
+        // Delete friend request
+        await pool.query(`
+            DELETE FROM friend_requests 
+            WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)
+        `, [userId, friendId]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/contacts', authenticateToken, async (req, res) => {
     try {
         // DISTINCT ON (u.id) prevents duplicate contacts if multiple paths exist
@@ -335,7 +379,16 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
             ORDER BY u.id
         `;
         const result = await pool.query(query, [req.user.id]);
-        res.json(result.rows);
+        
+        // Filter out if blocked? Usually contacts list might hide them, or just showing them is okay.
+        // Let's filter out users I have blocked from my contacts list for cleanliness, or keep them.
+        // The prompt implies strict separation. Let's filter.
+        const blockedRes = await pool.query('SELECT blocked_id FROM blocked_users WHERE blocker_id = $1', [req.user.id]);
+        const blockedIds = new Set(blockedRes.rows.map(r => r.blocked_id));
+        
+        const filtered = result.rows.filter(c => !blockedIds.has(c.id));
+        
+        res.json(filtered);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -414,19 +467,34 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
         `;
         const result = await pool.query(query, [req.user.id]);
         
+        // Need to check for blocks to anonymize list
+        const blocksRes = await pool.query('SELECT blocked_id, blocker_id FROM blocked_users WHERE blocker_id = $1 OR blocked_id = $1', [req.user.id]);
+        const blockedMap = new Set(); 
+        blocksRes.rows.forEach(r => {
+             // If I blocked them or they blocked me
+             if (r.blocker_id === req.user.id) blockedMap.add(r.blocked_id);
+             if (r.blocked_id === req.user.id) blockedMap.add(r.blocker_id);
+        });
+
         const enriched = await Promise.all(result.rows.map(async (row) => {
             let displayName = row.name;
             let displayAvatar = row.avatar_url;
 
             if (!row.is_group) {
                 const otherPRes = await pool.query(`
-                    SELECT u.username, u.tag, u.avatar_url FROM participants p JOIN users u ON p.user_id = u.id 
-                    WHERE p.conversation_id = $1 ORDER BY (p.user_id = $2) ASC LIMIT 1
+                    SELECT u.id, u.username, u.tag, u.avatar_url FROM participants p JOIN users u ON p.user_id = u.id 
+                    WHERE p.conversation_id = $1 AND p.user_id != $2 ORDER BY (p.user_id = $2) ASC LIMIT 1
                 `, [row.id, req.user.id]);
+                
                 if (otherPRes.rows.length > 0) {
                     const u = otherPRes.rows[0];
-                    displayName = `${u.username}#${u.tag}`;
-                    displayAvatar = u.avatar_url;
+                    if (blockedMap.has(u.id)) {
+                        displayName = "Utilisateur Talkio";
+                        displayAvatar = null;
+                    } else {
+                        displayName = `${u.username}#${u.tag}`;
+                        displayAvatar = u.avatar_url;
+                    }
                 } else { displayName = "Discussion"; }
             }
             return {
@@ -491,11 +559,6 @@ app.post('/api/conversations/:id/members', authenticateToken, async (req, res) =
     const { userIds } = req.body;
     const conversationId = req.params.id;
     try {
-        // Simple check: allow any member to add? or only admin? Let's say any member for now to be friendly.
-        // Or enforce admin:
-        // const adminCheck = await pool.query('SELECT 1 FROM participants WHERE conversation_id = $1 AND user_id = $2 AND role = $3', [conversationId, req.user.id, 'admin']);
-        // if (adminCheck.rows.length === 0) return res.status(403).json({error: "Admin only"});
-
         const placeholders = userIds.map((uid, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`).join(', ');
         const values = userIds.flatMap(uid => [uid, conversationId, 'member']);
         
@@ -574,12 +637,40 @@ app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
 
 app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query(`
-            SELECT json_build_object('id', u.id, 'username', u.username, 'tag', u.tag, 'email', u.email, 'is_online', u.is_online, 'avatar_url', u.avatar_url) as user_data
-            FROM participants p JOIN users u ON p.user_id = u.id 
-            WHERE p.conversation_id = $1 ORDER BY (p.user_id = $2) ASC LIMIT 1
-        `, [req.params.id, req.user.id]);
-        res.json(result.rows[0]?.user_data || null);
+        const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1 AND user_id != $2 LIMIT 1', [req.params.id, req.user.id]);
+        if (pRes.rows.length === 0) return res.json(null);
+        
+        const otherId = pRes.rows[0].user_id;
+
+        // Check Block Status
+        const blockRes = await pool.query(`
+            SELECT blocker_id FROM blocked_users 
+            WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)
+        `, [req.user.id, otherId]);
+
+        const isBlockedByMe = blockRes.rows.some(r => r.blocker_id === req.user.id);
+        const isBlockingMe = blockRes.rows.some(r => r.blocker_id === otherId);
+        
+        // Fetch User Data
+        const uRes = await pool.query('SELECT id, username, tag, email, is_online, avatar_url FROM users WHERE id = $1', [otherId]);
+        let userData = uRes.rows[0];
+
+        // Anonymize if blocked
+        if (isBlockedByMe || isBlockingMe) {
+            userData = {
+                ...userData,
+                username: 'Utilisateur Talkio',
+                tag: '????',
+                avatar_url: null, 
+                is_online: false 
+            };
+        }
+
+        res.json({ 
+            ...userData, 
+            is_blocked_by_me: isBlockedByMe,
+            is_blocking_me: isBlockingMe 
+        });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -635,10 +726,34 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
     const { conversation_id, replied_to_message_id } = req.body;
     const senderId = req.user.id;
     
+    // Check if blocked OR not friend (for 1:1)
+    const convCheck = await pool.query('SELECT is_group FROM conversations WHERE id = $1', [conversation_id]);
+    if (!convCheck.rows[0]) return res.status(404).json({ error: "Conversation introuvable" });
+
+    if (!convCheck.rows[0].is_group) {
+        const otherP = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1 AND user_id != $2', [conversation_id, senderId]);
+        if (otherP.rows.length > 0) {
+            const otherId = otherP.rows[0].user_id;
+            
+            // Check Block
+            const blocked = await pool.query('SELECT 1 FROM blocked_users WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)', [senderId, otherId]);
+            if (blocked.rows.length > 0) return res.status(403).json({ error: "Action impossible (Blocage actif)" });
+
+            // Check Friend Status
+            const friendCheck = await pool.query(`
+                SELECT 1 FROM friend_requests 
+                WHERE status = 'accepted' AND (
+                    (sender_id = $1 AND receiver_id = $2) OR 
+                    (sender_id = $2 AND receiver_id = $1)
+                )
+            `, [senderId, otherId]);
+            if (friendCheck.rows.length === 0) return res.status(403).json({ error: "Vous devez être amis pour discuter." });
+        }
+    }
+    
     let content = req.body.content;
     if (!content || content === 'undefined' || content === 'null') content = '';
     
-    // NEW: Handle GIF URL or explicit attachment URL passed from frontend
     let attachmentUrl = req.body.attachment_url || null;
     let messageType = req.body.message_type || 'text';
 
@@ -652,8 +767,6 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
                 uploadStream.end(req.file.buffer);
             });
             attachmentUrl = uploadResult.secure_url;
-            
-            // IF client says it's audio, keep audio, otherwise default to image for files
             if (messageType !== 'audio') {
                 messageType = 'image';
             }
@@ -740,6 +853,10 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
         if (!target) return res.status(404).json({ error: "Introuvable" });
         if (target.id === req.user.id) return res.status(400).json({ error: "Soi-même" });
         
+        // Check blocks
+        const blocked = await pool.query('SELECT 1 FROM blocked_users WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)', [req.user.id, target.id]);
+        if (blocked.rows.length > 0) return res.status(400).json({ error: "Impossible d'ajouter cet utilisateur." });
+
         const exist = await pool.query('SELECT * FROM friend_requests WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)', [req.user.id, target.id]);
         if (exist.rows.length > 0) return res.status(400).json({ error: "Déjà existant" });
 
@@ -763,7 +880,6 @@ app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res)
         const reqData = rRes.rows[0];
         
         if (status === 'accepted') {
-            // Check existing conversation
             const exist = await pool.query(`
                 SELECT c.id FROM conversations c
                 JOIN participants p1 ON c.id = p1.conversation_id

@@ -54,7 +54,7 @@ export interface Message {
   sender_username?: string;
   sender_avatar?: string;
   read_count?: number;
-  message_type?: 'text' | 'image' | 'video' | 'audio' | 'gif';
+  message_type?: 'text' | 'image' | 'video' | 'audio' | 'gif' | 'sticker';
   attachment_url?: string;
   image_url?: string; // Fallback for backward compatibility
   reactions?: Reaction[]; // New: List of reactions
@@ -74,6 +74,12 @@ export interface FriendRequest {
   status: 'pending' | 'accepted' | 'rejected';
   created_at: string;
   sender?: User;
+}
+
+export interface Sticker {
+  id: string;
+  url: string;
+  user_id: string | null;
 }
 
 export interface AuthResponse {

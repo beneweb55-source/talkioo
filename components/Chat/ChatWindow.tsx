@@ -2,11 +2,12 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus, Sticker as StickerIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
 import { GroupManager } from '../Groups/GroupManager'; 
 import { GifPicker } from './GifPicker';
+import { StickerPicker } from './StickerPicker';
 
 const MotionDiv = motion.div as any;
 const MotionButton = motion.button as any;
@@ -38,8 +39,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [isSending, setIsSending] = useState(false);
 
   const [showInputEmoji, setShowInputEmoji] = useState(false);
-  const [showGifPicker, setShowGifPicker] = useState(false); // NEW STATE
-  const [showMobileMediaMenu, setShowMobileMediaMenu] = useState(false); // Mobile Menu State
+  const [showGifPicker, setShowGifPicker] = useState(false); 
+  const [showStickerPicker, setShowStickerPicker] = useState(false); // NEW STATE
+  const [showMobileMediaMenu, setShowMobileMediaMenu] = useState(false); 
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false); 
 
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
@@ -51,6 +53,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const gifPickerRef = useRef<HTMLDivElement>(null); 
+  const stickerPickerRef = useRef<HTMLDivElement>(null); 
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   
   const isInsertingEmojiRef = useRef(false);
@@ -127,8 +130,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }
         if (gifPickerRef.current && !gifPickerRef.current.contains(event.target as Node) && 
             !(event.target as Element).closest('.gif-toggle-btn') && 
-            !(event.target as Element).closest('.mobile-media-btn')) { // Check mobile media button too
+            !(event.target as Element).closest('.mobile-media-btn')) {
             setShowGifPicker(false);
+        }
+        if (stickerPickerRef.current && !stickerPickerRef.current.contains(event.target as Node) && 
+            !(event.target as Element).closest('.sticker-toggle-btn') && 
+            !(event.target as Element).closest('.mobile-media-btn')) {
+            setShowStickerPicker(false);
         }
         if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node) &&
             !(event.target as Element).closest('.mobile-plus-btn')) {
@@ -157,6 +165,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       if (!isInsertingEmojiRef.current) {
           setShowInputEmoji(false);
           setShowGifPicker(false);
+          setShowStickerPicker(false);
           setShowMobileMediaMenu(false);
       }
       
@@ -292,8 +301,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       setShowGifPicker(false);
       try {
           await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'gif', undefined, gifUrl);
-          // Optimistic update handled by socket subscription mostly, but we can add temp if needed
       } catch (err) { console.error("GIF send error", err); }
+  };
+
+  const handleStickerSelect = async (stickerUrl: string) => {
+      setShowStickerPicker(false);
+      try {
+          await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'sticker', undefined, stickerUrl);
+      } catch (err) { console.error("Sticker send error", err); }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -343,6 +358,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     setIsSending(true);
     setShowInputEmoji(false);
     setShowGifPicker(false);
+    setShowStickerPicker(false);
     setShowMobileMediaMenu(false);
     
     if (typingTimeoutRef.current) {
@@ -580,6 +596,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         <GifPicker onSelect={handleGifSelect} />
                     </MotionDiv>
                 )}
+                {showStickerPicker && (
+                    <MotionDiv 
+                        ref={stickerPickerRef}
+                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                        className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
+                        style={{ width: 'min(350px, 90vw)', height: '400px' }}
+                    >
+                        <StickerPicker onSelect={handleStickerSelect} />
+                    </MotionDiv>
+                )}
             </AnimatePresence>
 
             <AnimatePresence>
@@ -621,14 +649,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             <div className="flex items-end gap-2 px-2 pb-2">
                 <div className="flex-shrink-0 mb-1 flex gap-2 items-center">
                     {/* Emoji Button - Always visible */}
-                     <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowMobileMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                     <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowStickerPicker(false); setShowMobileMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                         <Smile size={24} />
                      </button>
                      
                      {/* Desktop: Direct Buttons */}
                      <div className="hidden md:flex gap-2">
-                         <button onClick={() => { setShowGifPicker(!showGifPicker); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`gif-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showGifPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                         <button onClick={() => { setShowGifPicker(!showGifPicker); setShowStickerPicker(false); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`gif-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showGifPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                             <StickyNote size={24} />
+                         </button>
+                         <button onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`sticker-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showStickerPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                            <StickerIcon size={24} />
                          </button>
                         <button onClick={() => fileInputRef.current?.click()} className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${selectedFile ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                             <Image size={24} />
@@ -658,6 +689,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                                     >
                                         <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg"><StickyNote size={18}/></div>
                                         GIF
+                                    </button>
+                                    <button 
+                                        onClick={() => { setShowMobileMediaMenu(false); setShowStickerPicker(true); }} 
+                                        className="mobile-media-btn flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                    >
+                                        <div className="p-1.5 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-lg"><StickerIcon size={18}/></div>
+                                        Sticker
                                     </button>
                                     <button 
                                         onClick={() => { setShowMobileMediaMenu(false); fileInputRef.current?.click(); }} 

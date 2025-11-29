@@ -166,6 +166,39 @@ app.get('/api/gifs/trending', async (req, res) => {
     }
 });
 
+// --- STICKERS ROUTES ---
+
+app.get('/api/stickers', authenticateToken, async (req, res) => {
+    try {
+        // Fetch global stickers (user_id IS NULL) and user's own stickers
+        const result = await pool.query(
+            'SELECT * FROM stickers WHERE user_id IS NULL OR user_id = $1 ORDER BY created_at DESC', 
+            [req.user.id]
+        );
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/stickers', authenticateToken, upload.single('sticker'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "Aucun fichier" });
+    
+    try {
+        const uploadResult = await new Promise((resolve, reject) => {
+            const uploadStream = cloudinary.uploader.upload_stream(
+                { folder: `chat-app/stickers/${req.user.id}`, resource_type: "image" },
+                (error, result) => { if (error) reject(error); else resolve(result); }
+            );
+            uploadStream.end(req.file.buffer);
+        });
+
+        const result = await pool.query(
+            'INSERT INTO stickers (url, user_id) VALUES ($1, $2) RETURNING *',
+            [uploadResult.secure_url, req.user.id]
+        );
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "Erreur upload sticker" }); }
+});
+
 // REACTIONS
 app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
     const messageId = req.params.id;

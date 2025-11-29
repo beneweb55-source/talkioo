@@ -139,9 +139,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   const safeContent = message.content || "";
   const attachmentUrl = message.attachment_url || message.image_url;
   const isLegacyBase64 = safeContent.startsWith('data:image');
-  const isMedia = !!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif';
+  const isSticker = message.message_type === 'sticker';
+  const isMedia = (!!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif') && !isSticker;
   
-  const jumboClass = !isMedia && !isDeleted ? getJumboEmojiClass(safeContent) : null;
+  const jumboClass = !isMedia && !isSticker && !isDeleted ? getJumboEmojiClass(safeContent) : null;
 
   const reactionData: { [emoji: string]: { count: number, hasReacted: boolean, users: string[] } } = {};
   let hasReactions = false;
@@ -169,6 +170,15 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       setShowReactionMenu(false);
   };
 
+  // Sticker container should be transparent and borderless
+  const bubbleClasses = isSticker 
+    ? 'bg-transparent shadow-none border-none p-0' 
+    : jumboClass 
+        ? 'bg-transparent shadow-none border-none p-1' 
+        : isOwn 
+            ? 'bg-gradient-to-br from-brand-500 to-brand-600 text-white rounded-2xl rounded-tr-sm shadow-sm' 
+            : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-2xl rounded-tl-sm border border-gray-100 dark:border-gray-700 shadow-sm';
+
   return (
     <MotionDiv 
         id={`msg-${message.id}`}
@@ -192,13 +202,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         style={{ transform: `translateX(${translateX}px)` }}
       >
         <div className={`relative flex flex-col min-w-[5rem]
-            ${jumboClass 
-                ? 'bg-transparent shadow-none border-none p-1' 
-                : isOwn 
-                    ? 'bg-gradient-to-br from-brand-500 to-brand-600 text-white rounded-2xl rounded-tr-sm shadow-sm' 
-                    : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 rounded-2xl rounded-tl-sm border border-gray-100 dark:border-gray-700 shadow-sm'
-            } 
-            ${isDeleted ? 'opacity-80 italic px-4 py-2.5' : (jumboClass ? '' : 'px-4 py-2.5')}`}
+            ${bubbleClasses} 
+            ${isDeleted ? 'opacity-80 italic px-4 py-2.5' : (jumboClass || isSticker ? '' : 'px-4 py-2.5')}`}
         >
           {/* --- MODERN REACTION MENU --- */}
           <AnimatePresence>
@@ -242,7 +247,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                         {onReply && (
                             <button onClick={() => { onReply(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-brand-500 text-gray-400"><Reply size={15}/></button>
                         )}
-                        {isOwn && onEdit && !isMedia && (
+                        {isOwn && onEdit && !isMedia && !isSticker && (
                              <button onClick={() => { onEdit(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-blue-500 text-gray-400"><Pencil size={14}/></button>
                         )}
                         {isOwn && onDelete && (
@@ -286,7 +291,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                     </button>
                  )}
                  
-                 {isOwn && onEdit && !isMedia && (
+                 {isOwn && onEdit && !isMedia && !isSticker && (
                     <button onClick={(e) => { e.stopPropagation(); onEdit(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-blue-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Modifier">
                         <Pencil size={16} />
                     </button>
@@ -308,16 +313,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
              </div>
           )}
 
-          {message.reply && !isDeleted && !jumboClass && (
+          {message.reply && !isDeleted && !jumboClass && !isSticker && (
               <div className={`mb-2 rounded-lg p-2 text-xs border-l-2 bg-black/10 dark:bg-white/5 ${isOwn ? 'border-white/50 text-white/90' : 'border-brand-500 text-gray-600 dark:text-gray-300'}`}>
                   <div className="font-bold opacity-90 mb-0.5">{message.reply.sender}</div>
                   <div className="truncate opacity-80">
-                    {(message.reply.content || "").startsWith('data:image') || message.reply.attachment_url ? '📷 Photo' : (message.reply.content || "")}
+                    {message.reply.message_type === 'image' || (message.reply.content || "").startsWith('data:image') || message.reply.attachment_url ? '📷 Média' : (message.reply.content || "")}
                   </div>
               </div>
           )}
 
-          {!isOwn && !isDeleted && !jumboClass && (
+          {!isOwn && !isDeleted && !jumboClass && !isSticker && (
             <div className="text-[10px] font-bold text-brand-600 dark:text-brand-400 mb-1 uppercase tracking-wide">
               {message.sender_username}
             </div>
@@ -328,7 +333,22 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   <span className="flex items-center gap-1.5 text-sm opacity-80"><Trash2 size={12}/> Message supprimé</span>
               ) : (
                   <>
-                      {isMedia && (
+                      {isSticker ? (
+                        <div className="relative">
+                            {!imgLoaded && !imgError && (
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                    <Loader2 className="animate-spin text-gray-400" size={20} />
+                                </div>
+                            )}
+                            <img 
+                                src={attachmentUrl || ''} 
+                                alt="Sticker" 
+                                className="w-32 h-32 object-contain hover:scale-105 transition-transform duration-200"
+                                onLoad={() => setImgLoaded(true)}
+                                onError={() => { setImgError(true); setImgLoaded(true); }}
+                            />
+                        </div>
+                      ) : isMedia ? (
                           <div className={`my-1 mb-2 relative w-full bg-gray-100 dark:bg-gray-800/50 rounded-lg overflow-hidden flex items-center justify-center min-h-[150px]`}>
                              {!imgLoaded && !imgError && (
                                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-100/50 dark:bg-gray-800/50 backdrop-blur-[2px]">
@@ -362,9 +382,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                                 )
                              )}
                           </div>
+                      ) : (
+                          !isLegacyBase64 && renderContent(safeContent, highlightTerm)
                       )}
-                      
-                      {!isLegacyBase64 && renderContent(safeContent, highlightTerm)}
                   </>
               )}
           </div>
@@ -372,25 +392,26 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
           {/* Timestamp Container */}
           <div className={`
               flex items-center justify-end gap-1 mt-1 select-none flex-wrap w-full
-              ${jumboClass 
+              ${jumboClass || isSticker
                 ? 'text-gray-500 dark:text-gray-400' 
                 : (isOwn ? 'text-brand-100' : 'text-gray-400')
               } 
               ${jumboClass ? 'px-2 pb-1' : ''}
+              ${isSticker ? 'bg-black/10 dark:bg-white/10 rounded-full px-2 py-0.5 w-auto self-end inline-flex mt-1 backdrop-blur-sm' : ''}
           `}>
             {isEdited && <span className="text-[10px] opacity-80">modifié</span>}
-            <span className="text-[10px] opacity-80 whitespace-nowrap">
+            <span className={`text-[10px] opacity-80 whitespace-nowrap ${isSticker ? 'text-white font-medium shadow-sm' : ''}`}>
               {new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
             {isOwn && !isDeleted && (
                 isReadByOthers 
-                    ? <CheckCheck size={14} className={`${jumboClass ? 'text-brand-500' : 'text-white'} flex-shrink-0`} /> 
-                    : <Check size={14} className={`${jumboClass ? 'text-gray-400' : 'text-white/60'} flex-shrink-0`} />
+                    ? <CheckCheck size={14} className={`${jumboClass || isSticker ? (isSticker ? 'text-white' : 'text-brand-500') : 'text-white'} flex-shrink-0`} /> 
+                    : <Check size={14} className={`${jumboClass || isSticker ? (isSticker ? 'text-white/80' : 'text-gray-400') : 'text-white/60'} flex-shrink-0`} />
             )}
           </div>
 
           {!isDeleted && (
-            <div className={`flex flex-wrap gap-1 mt-2 -mb-5 relative z-20 ${jumboClass ? 'mt-0 px-2' : ''}`}>
+            <div className={`flex flex-wrap gap-1 mt-2 -mb-5 relative z-20 ${jumboClass || isSticker ? 'mt-0 px-2' : ''}`}>
               {Object.entries(reactionData).map(([emoji, { count, hasReacted, users }]) => (
                 <div key={emoji} className="relative">
                     <button

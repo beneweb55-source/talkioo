@@ -1,7 +1,8 @@
 
 
+
 import { io, Socket } from 'socket.io-client';
-import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction, GroupMember } from '../types';
+import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction, GroupMember, Sticker } from '../types';
 
 // --- CONFIGURATION ---
 const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
@@ -194,7 +195,7 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
     return await fetchWithAuth(`/conversations/${conversationId}/messages`);
 };
 
-export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image'|'gif' = 'text', file?: File, attachmentUrl?: string): Promise<Message> => {
+export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image'|'gif'|'sticker' = 'text', file?: File, attachmentUrl?: string): Promise<Message> => {
     
     if (file) {
         // Validation Size (Double check client-side)
@@ -214,8 +215,8 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
                 conversation_id: conversationId, 
                 content: content || "", 
                 replied_to_message_id: repliedToId,
-                message_type: messageType, // Use the provided type (text, image, gif)
-                attachment_url: attachmentUrl // Optional manual URL (for GIFs)
+                message_type: messageType, // Use the provided type (text, image, gif, sticker)
+                attachment_url: attachmentUrl // Optional manual URL (for GIFs, stickers)
             }) 
         });
     }
@@ -234,6 +235,17 @@ export const searchGifsAPI = async (query: string, pos?: string) => {
     if (pos) url += `&pos=${pos}`;
     const data = await fetchWithAuth(url);
     return data;
+};
+
+// --- STICKERS ---
+export const getStickersAPI = async (): Promise<Sticker[]> => {
+    return await fetchWithAuth('/stickers');
+};
+
+export const uploadStickerAPI = async (file: File): Promise<Sticker> => {
+    const formData = new FormData();
+    formData.append('sticker', file);
+    return await fetchWithAuth('/stickers', { method: 'POST', body: formData });
 };
 
 // --- REACTIONS ---

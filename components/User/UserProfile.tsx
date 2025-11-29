@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { updateProfileAPI, updatePasswordAPI } from '../../services/api';
 import { Button } from '../ui/Button';
@@ -29,6 +29,18 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
 
+  // Sync state if user updates from elsewhere (e.g. Socket in App.tsx)
+  useEffect(() => {
+    if (user) {
+        setUsername(user.username);
+        setEmail(user.email);
+        // Only update preview if no file is currently selected by user
+        if (!selectedAvatar) {
+            setAvatarPreview(user.avatar_url || null);
+        }
+    }
+  }, [user, selectedAvatar]);
+
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
           const file = e.target.files[0];
@@ -42,7 +54,6 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
     setIsLoading(true);
     setMessage(null);
     try {
-      // Correction: Call with single argument (data object)
       const updatedUser = await updateProfileAPI({ 
           username, 
           email,
@@ -53,6 +64,8 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       if (updatedUser) {
           const currentToken = localStorage.getItem('talkio_auth_token') || '';
           login(updatedUser, currentToken);
+          // FORCE PREVIEW UPDATE to the real server URL to ensure we stop showing the blob
+          setAvatarPreview(updatedUser.avatar_url || null);
       }
       setMessage({ text: "Profil mis à jour avec succès !", type: 'success' });
       setSelectedAvatar(null); // Reset selection
@@ -68,7 +81,6 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
     setIsLoading(true);
     setMessage(null);
     try {
-      // Correction: Call with single argument (data object)
       await updatePasswordAPI({ oldPassword, newPassword });
       setMessage({ text: "Mot de passe modifié !", type: 'success' });
       setOldPassword('');

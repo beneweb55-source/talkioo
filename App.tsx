@@ -23,7 +23,7 @@ const MotionDiv = motion.div as any;
 type MobileView = 'chats' | 'contacts' | 'profile';
 
 const Dashboard = () => {
-  const { user, logout, token } = useAuth();
+  const { user, logout, login, token } = useAuth();
   
   // Data State
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -93,8 +93,15 @@ const Dashboard = () => {
     const unsubProfile = subscribeToUserProfileUpdates((updatedUser) => {
         // Update local contact list if present
         setContacts(prev => prev.map(c => c.id === updatedUser.id ? { ...c, ...updatedUser } : c));
+        
         // Refresh conversations to update names if necessary
         fetchData();
+
+        // IMPORTANT: If the updated user is ME, update my local session state immediately
+        // This ensures the avatar/name updates in the UI (sidebar, profile) without reload
+        if (user && updatedUser.id === user.id) {
+            login(updatedUser, token || '');
+        }
     });
 
     return () => { unsubReq(); unsubConv(); unsubStatus(); unsubProfile(); };
@@ -155,8 +162,12 @@ const Dashboard = () => {
                           <div key={contact.id} className="flex items-center justify-between p-3 bg-white dark:bg-gray-800/50 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                               <div className="flex items-center gap-3">
                                   <div className="relative">
-                                      <div className="h-10 w-10 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center font-bold text-gray-600 dark:text-gray-300">
-                                          {contact.username.charAt(0).toUpperCase()}
+                                      <div className="h-10 w-10 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center font-bold text-gray-600 dark:text-gray-300 overflow-hidden">
+                                          {contact.avatar_url ? (
+                                              <img src={contact.avatar_url} alt={contact.username} className="w-full h-full object-cover" />
+                                          ) : (
+                                              contact.username.charAt(0).toUpperCase()
+                                          )}
                                       </div>
                                       {onlineUsers.has(contact.id) && <div className="absolute bottom-0 right-0 h-3 w-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-800"></div>}
                                   </div>
@@ -167,13 +178,8 @@ const Dashboard = () => {
                               </div>
                               <button 
                                   onClick={async () => {
-                                      // Start chat logic (simplified: creates or opens existing)
                                       try {
-                                          const res = await createGroupConversationAPI("", [contact.id]); // Actually creates private chat if name is empty
-                                          // API logic for private chat might need check but assuming createGroup handles or we use logic from backend
-                                          // For now, let's assume we trigger a "Check or Create" logic.
-                                          // Since we don't have a direct "createPrivate" exposed here, we might need to rely on the backend deduplication
-                                          // Or better: Use the search in Chats to find them.
+                                          const res = await createGroupConversationAPI("", [contact.id]); 
                                           alert("Pour discuter, utilisez la recherche dans l'onglet 'Chats' ou créez un groupe.");
                                       } catch(e) { console.error(e); }
                                   }}
@@ -266,8 +272,12 @@ const Dashboard = () => {
         <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md sticky top-0 z-20">
             <div className="flex justify-between items-center mb-4">
                 <div className="flex items-center gap-3 group cursor-pointer" onClick={() => setMobileView('profile')}>
-                    <div className="h-9 w-9 bg-gradient-to-tr from-brand-500 to-brand-600 rounded-xl flex items-center justify-center text-white font-bold shadow-md">
-                        {user?.username.charAt(0).toUpperCase()}
+                    <div className="h-9 w-9 bg-gradient-to-tr from-brand-500 to-brand-600 rounded-xl flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
+                        {user?.avatar_url ? (
+                            <img src={user.avatar_url} alt={user.username} className="w-full h-full object-cover" />
+                        ) : (
+                            user?.username.charAt(0).toUpperCase()
+                        )}
                     </div>
                     <div>
                         <h1 className="text-lg font-bold text-gray-900 dark:text-white leading-tight">Discussions</h1>
@@ -330,7 +340,7 @@ const Dashboard = () => {
         )}
 
         {/* Bottom Navigation (Mobile Only) */}
-        <div className="md:hidden h-16 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex items-center justify-around px-2 z-30 pb-safe">
+        <div className="md:hidden h-16 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex items-center justify-around px-2 z-30 pb-safe fixed bottom-0 left-0 w-full backdrop-blur-lg bg-white/90 dark:bg-gray-900/90">
             <button 
                 onClick={() => setMobileView('chats')} 
                 className={`flex flex-col items-center gap-1 p-2 rounded-xl w-16 transition-all ${mobileView === 'chats' ? 'text-brand-600 dark:text-brand-400' : 'text-gray-400'}`}

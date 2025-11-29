@@ -38,7 +38,6 @@ const pool = new Pool({
 // --- HELPER FUNCTIONS ---
 const getAggregatedReactions = async (messageId) => {
     try {
-        // Retourne un tableau d'objets { emoji, user_id, username }
         const res = await pool.query(`
             SELECT mr.emoji, mr.user_id, u.username 
             FROM message_reactions mr 
@@ -54,7 +53,7 @@ const getAggregatedReactions = async (messageId) => {
 
 // --- MIDDLEWARE ---
 app.use((req, res, next) => {
-    console.log(`[REQUEST] ${req.method} ${req.url}`);
+    // console.log(`[REQUEST] ${req.method} ${req.url}`);
     next();
 });
 
@@ -124,56 +123,39 @@ const authenticateToken = (req, res, next) => {
 
 // --- ROUTES ---
 
-// 1. REACTIONS ROUTE (Priority High - Explicit Definition)
+// REACTIONS
 app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
     const messageId = req.params.id;
     const userId = req.user.id;
     const { emoji } = req.body; 
 
     try {
-        // 1. Check if message exists and get conversation ID
         const msgCheck = await pool.query('SELECT conversation_id FROM messages WHERE id = $1', [messageId]);
-        if (msgCheck.rows.length === 0) {
-            return res.status(404).json({ error: "Message introuvable" });
-        }
+        if (msgCheck.rows.length === 0) return res.status(404).json({ error: "Message introuvable" });
         const conversationId = msgCheck.rows[0].conversation_id;
 
-        // 2. Handle Reaction Logic (Toggle Specific Emoji)
-        if (!emoji) {
-            return res.status(400).json({ error: "Emoji required" });
+        if (!emoji) return res.status(400).json({ error: "Emoji required" });
+        
+        const existing = await pool.query(
+            'SELECT id FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', 
+            [messageId, userId, emoji]
+        );
+        
+        if (existing.rows.length > 0) {
+            await pool.query('DELETE FROM message_reactions WHERE id = $1', [existing.rows[0].id]);
         } else {
-            // Check if this specific user has already reacted with this specific emoji
-            const existing = await pool.query(
-                'SELECT id FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', 
+            await pool.query(
+                'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', 
                 [messageId, userId, emoji]
             );
-            
-            if (existing.rows.length > 0) {
-                // Already exists -> Remove it (Toggle OFF)
-                await pool.query('DELETE FROM message_reactions WHERE id = $1', [existing.rows[0].id]);
-            } else {
-                // Doesn't exist -> Insert it (Toggle ON)
-                await pool.query(
-                    'INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', 
-                    [messageId, userId, emoji]
-                );
-            }
         }
 
-        // 3. Get updated list using Helper
         const reactions = await getAggregatedReactions(messageId);
         
-        // 4. Broadcast
-        io.to(conversationId).emit('message_reaction_update', {
-            messageId: messageId,
-            reactions: reactions
-        });
+        io.to(conversationId).emit('message_reaction_update', { messageId, reactions });
 
         res.json({ success: true, reactions });
-    } catch (err) {
-        console.error("[DEBUG-REACTION] Erreur:", err);
-        res.status(500).json({ error: "Erreur serveur réaction" });
-    }
+    } catch (err) { res.status(500).json({ error: "Erreur serveur réaction" }); }
 });
 
 app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
@@ -206,7 +188,7 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// USERS
+// USERS & PROFILE
 app.get('/api/users/online', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id FROM users WHERE is_online = TRUE');
@@ -216,30 +198,19 @@ app.get('/api/users/online', authenticateToken, async (req, res) => {
 
 app.put('/api/users/profile', authenticateToken, upload.single('avatar'), async (req, res) => {
     const { username, email } = req.body;
-    
     let avatarUrl = null;
     
     if (req.file) {
         try {
             const uploadResult = await new Promise((resolve, reject) => {
                 const uploadStream = cloudinary.uploader.upload_stream(
-                    {
-                        folder: `chat-app/avatars`,
-                        resource_type: "image",
-                        transformation: [{ width: 300, height: 300, crop: "fill", gravity: "face" }]
-                    },
-                    (error, result) => {
-                        if (error) reject(error);
-                        else resolve(result); 
-                    }
+                    { folder: `chat-app/avatars`, resource_type: "image", transformation: [{ width: 300, height: 300, crop: "fill", gravity: "face" }] },
+                    (error, result) => { if (error) reject(error); else resolve(result); }
                 );
                 uploadStream.end(req.file.buffer);
             });
             avatarUrl = uploadResult.secure_url;
-        } catch (error) {
-            console.error('Avatar Upload Error:', error);
-            return res.status(500).json({ error: "Erreur upload avatar" });
-        }
+        } catch (error) { return res.status(500).json({ error: "Erreur upload avatar" }); }
     }
 
     try {
@@ -248,10 +219,7 @@ app.put('/api/users/profile', authenticateToken, upload.single('avatar'), async 
             [username, email, avatarUrl, req.user.id]
         );
         const updatedUser = result.rows[0];
-        
-        // Broadcast profile update to all clients
         io.emit('USER_PROFILE_UPDATE', updatedUser);
-        
         res.json(updatedUser);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -293,7 +261,8 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// CONVERSATIONS
+// --- CONVERSATIONS & GROUPS ---
+
 app.post('/api/conversations', authenticateToken, async (req, res) => {
     const { name, participantIds } = req.body; 
     const userId = req.user.id;
@@ -306,14 +275,50 @@ app.post('/api/conversations', authenticateToken, async (req, res) => {
         
         let participantValues = [], participantPlaceholders = [];
         for (let i = 0; i < allParticipants.length; i++) {
-            participantPlaceholders.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
-            participantValues.push(allParticipants[i], conversationId);
+            const uid = allParticipants[i];
+            const role = (uid === userId && is_group) ? 'admin' : 'member';
+            participantPlaceholders.push(`($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`);
+            participantValues.push(uid, conversationId, role);
         }
-        await pool.query(`INSERT INTO participants (user_id, conversation_id) VALUES ${participantPlaceholders.join(', ')}`, participantValues);
+        await pool.query(`INSERT INTO participants (user_id, conversation_id, role) VALUES ${participantPlaceholders.join(', ')}`, participantValues);
         await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [conversationId, userId, is_group ? `👋 Groupe "${name}" créé !` : '👋 Nouvelle discussion.']);
         
         allParticipants.forEach(uid => io.to(`user:${uid}`).emit('conversation_added', { conversationId }));
         res.status(201).json({ conversationId, name, is_group, participants: allParticipants });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Update Group Info (Name, Avatar)
+app.put('/api/conversations/:id', authenticateToken, upload.single('avatar'), async (req, res) => {
+    const conversationId = req.params.id;
+    const { name } = req.body;
+    let avatarUrl = null;
+
+    if (req.file) {
+        try {
+            const uploadResult = await new Promise((resolve, reject) => {
+                const uploadStream = cloudinary.uploader.upload_stream(
+                    { folder: `chat-app/groups`, resource_type: "image", transformation: [{ width: 300, height: 300, crop: "fill" }] },
+                    (error, result) => { if (error) reject(error); else resolve(result); }
+                );
+                uploadStream.end(req.file.buffer);
+            });
+            avatarUrl = uploadResult.secure_url;
+        } catch (error) { return res.status(500).json({ error: "Erreur upload avatar" }); }
+    }
+
+    try {
+        const result = await pool.query(
+            'UPDATE conversations SET name = COALESCE($1, name), avatar_url = COALESCE($2, avatar_url) WHERE id = $3 RETURNING *',
+            [name, avatarUrl, conversationId]
+        );
+        const updatedConv = result.rows[0];
+        
+        // Notify all participants
+        const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversationId]);
+        pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId }));
+        
+        res.json(updatedConv);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -333,6 +338,8 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
         
         const enriched = await Promise.all(result.rows.map(async (row) => {
             let displayName = row.name;
+            let displayAvatar = row.avatar_url;
+
             if (!row.is_group) {
                 const otherPRes = await pool.query(`
                     SELECT u.username, u.tag, u.avatar_url FROM participants p JOIN users u ON p.user_id = u.id 
@@ -341,12 +348,13 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
                 if (otherPRes.rows.length > 0) {
                     const u = otherPRes.rows[0];
                     displayName = `${u.username}#${u.tag}`;
-                    row.avatar_url = u.avatar_url; // Inject avatar for UI
+                    displayAvatar = u.avatar_url;
                 } else { displayName = "Discussion"; }
             }
             return {
                 ...row,
                 name: displayName || "Discussion",
+                avatar_url: displayAvatar,
                 last_message: row.last_message_deleted ? "🚫 Message supprimé" : (row.last_message_content || "Nouvelle discussion"),
                 last_message_at: row.last_message_time || row.created_at
             };
@@ -355,12 +363,91 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Soft delete / Hide conversation
 app.delete('/api/conversations/:id', authenticateToken, async (req, res) => {
     try {
         await pool.query('UPDATE participants SET last_deleted_at = NOW() WHERE conversation_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
         res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// Get Members of a Group
+app.get('/api/conversations/:id/members', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT u.id, u.username, u.tag, u.avatar_url, p.role, p.joined_at
+            FROM participants p 
+            JOIN users u ON p.user_id = u.id 
+            WHERE p.conversation_id = $1
+            ORDER BY p.role = 'admin' DESC, p.joined_at ASC
+        `, [req.params.id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Add Members to Group
+app.post('/api/conversations/:id/members', authenticateToken, async (req, res) => {
+    const { userIds } = req.body;
+    const conversationId = req.params.id;
+    try {
+        // Simple check: allow any member to add? or only admin? Let's say any member for now to be friendly.
+        // Or enforce admin:
+        // const adminCheck = await pool.query('SELECT 1 FROM participants WHERE conversation_id = $1 AND user_id = $2 AND role = $3', [conversationId, req.user.id, 'admin']);
+        // if (adminCheck.rows.length === 0) return res.status(403).json({error: "Admin only"});
+
+        const placeholders = userIds.map((uid, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`).join(', ');
+        const values = userIds.flatMap(uid => [uid, conversationId, 'member']);
+        
+        await pool.query(`INSERT INTO participants (user_id, conversation_id, role) VALUES ${placeholders} ON CONFLICT DO NOTHING`, values);
+        
+        userIds.forEach(uid => io.to(`user:${uid}`).emit('conversation_added', { conversationId }));
+        
+        // Notify Group
+        await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [conversationId, req.user.id, `👋 Nouveaux membres ajoutés.`]);
+        const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversationId]);
+        pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId }));
+
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Remove Member (Kick)
+app.delete('/api/conversations/:id/members/:userId', authenticateToken, async (req, res) => {
+    const conversationId = req.params.id;
+    const targetUserId = req.params.userId;
+    try {
+        // Verify requester is admin
+        const adminCheck = await pool.query('SELECT role FROM participants WHERE conversation_id = $1 AND user_id = $2', [conversationId, req.user.id]);
+        if (adminCheck.rows.length === 0 || adminCheck.rows[0].role !== 'admin') {
+            return res.status(403).json({ error: "Seuls les admins peuvent exclure des membres." });
+        }
+
+        await pool.query('DELETE FROM participants WHERE conversation_id = $1 AND user_id = $2', [conversationId, targetUserId]);
+        
+        // Notify
+        io.to(`user:${targetUserId}`).emit('conversation_removed', { conversationId }); // Client logic to hide it?
+        await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [conversationId, req.user.id, `🚫 Un membre a été exclu.`]);
+        const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversationId]);
+        pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId }));
+
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Leave Group
+app.delete('/api/conversations/:id/leave', authenticateToken, async (req, res) => {
+    const conversationId = req.params.id;
+    try {
+        await pool.query('DELETE FROM participants WHERE conversation_id = $1 AND user_id = $2', [conversationId, req.user.id]);
+        
+        await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [conversationId, req.user.id, `🏃 a quitté le groupe.`]);
+        const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversationId]);
+        pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId }));
+        
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 
 app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
     const conversationId = req.params.id;
@@ -440,56 +527,34 @@ const uploadMiddleware = upload.single('media');
 
 app.post('/api/messages', authenticateToken, (req, res, next) => {
     uploadMiddleware(req, res, (err) => {
-        if (err) {
-            console.error('[MULTER DEBUG] Error:', err);
-            return res.status(500).json({ error: `Upload Error: ${err.message}` });
-        }
+        if (err) return res.status(500).json({ error: `Upload Error: ${err.message}` });
         next();
     });
 }, async (req, res) => {
-    // console.log(`[DEBUG-RENDER] Route POST /api/messages atteinte`);
     const { conversation_id, replied_to_message_id } = req.body;
     const senderId = req.user.id;
     
     let content = req.body.content;
-    if (!content || content === 'undefined' || content === 'null') {
-        content = '';
-    }
+    if (!content || content === 'undefined' || content === 'null') content = '';
 
     let attachmentUrl = null;
     let messageType = 'text';
 
-    // --- LOGIQUE DE TÉLÉCHARGEMENT CLOUDINARY ---
     if (req.file) {
-        console.log(`[DEBUG-RENDER] Start Upload: ${req.file.originalname}`);
         try {
             const uploadResult = await new Promise((resolve, reject) => {
                 const uploadStream = cloudinary.uploader.upload_stream(
-                    {
-                        folder: `chat-app/conversations/${conversation_id}`,
-                        resource_type: "auto"
-                    },
-                    (error, result) => {
-                        if (error) reject(error);
-                        else resolve(result); 
-                    }
+                    { folder: `chat-app/conversations/${conversation_id}`, resource_type: "auto" },
+                    (error, result) => { if (error) reject(error); else resolve(result); }
                 );
                 uploadStream.end(req.file.buffer);
             });
-
             attachmentUrl = uploadResult.secure_url;
             messageType = 'image';
-            console.log(`[DEBUG-RENDER] Upload Final URL: ${attachmentUrl}`);
-
-        } catch (error) {
-            console.error('[DEBUG-RENDER] ❌ ERROR CLOUDINARY:', error);
-            return res.status(500).json({ error: "Échec upload média." });
-        }
+        } catch (error) { return res.status(500).json({ error: "Échec upload média." }); }
     }
 
-    if (!attachmentUrl && content.trim() === '') {
-         return res.status(400).json({ error: 'Message vide.' });
-    }
+    if (!attachmentUrl && content.trim() === '') return res.status(400).json({ error: 'Message vide.' });
 
     try {
         const result = await pool.query(
@@ -532,10 +597,7 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
         pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId: conversation_id }));
         
         res.json(fullMsg);
-    } catch (err) {
-        console.error("[DEBUG-RENDER] SQL/Logic Error:", err);
-        res.status(500).json({ error: err.message });
-    }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/messages/:id', authenticateToken, async (req, res) => {

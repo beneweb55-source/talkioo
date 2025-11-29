@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, Reaction } from '../../types';
-import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon, SmilePlus, Plus, X, Smile } from 'lucide-react';
+import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon, SmilePlus, Plus, X, Smile, Play, Pause } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../context/AuthContext';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
@@ -65,6 +65,75 @@ const getJumboEmojiClass = (text: string) => {
         return null;
     }
     return null;
+};
+
+// AUDIO PLAYER COMPONENT
+const AudioMessagePlayer = ({ src, isOwn }: { src: string, isOwn: boolean }) => {
+    const audioRef = useRef<HTMLAudioElement>(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [duration, setDuration] = useState(0);
+
+    const togglePlay = () => {
+        if (!audioRef.current) return;
+        if (isPlaying) audioRef.current.pause();
+        else audioRef.current.play();
+    };
+
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+
+        const onTimeUpdate = () => {
+            if (audio.duration) {
+                setProgress((audio.currentTime / audio.duration) * 100);
+            }
+        };
+
+        const onLoadedMetadata = () => setDuration(audio.duration);
+        const onEnded = () => { setIsPlaying(false); setProgress(0); };
+        const onPlay = () => setIsPlaying(true);
+        const onPause = () => setIsPlaying(false);
+
+        audio.addEventListener('timeupdate', onTimeUpdate);
+        audio.addEventListener('loadedmetadata', onLoadedMetadata);
+        audio.addEventListener('ended', onEnded);
+        audio.addEventListener('play', onPlay);
+        audio.addEventListener('pause', onPause);
+
+        return () => {
+            audio.removeEventListener('timeupdate', onTimeUpdate);
+            audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+            audio.removeEventListener('ended', onEnded);
+            audio.removeEventListener('play', onPlay);
+            audio.removeEventListener('pause', onPause);
+        };
+    }, []);
+
+    const formatTime = (time: number) => {
+        if (!time) return "0:00";
+        const m = Math.floor(time / 60);
+        const s = Math.floor(time % 60);
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    };
+
+    return (
+        <div className={`flex items-center gap-3 min-w-[200px] p-1`}>
+            <button onClick={togglePlay} className={`h-10 w-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors ${isOwn ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-brand-100 hover:bg-brand-200 text-brand-600 dark:bg-gray-700 dark:text-gray-200'}`}>
+                {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
+            </button>
+            <div className="flex-1 flex flex-col justify-center">
+                <div className={`h-1 w-full rounded-full overflow-hidden ${isOwn ? 'bg-black/20' : 'bg-gray-200 dark:bg-gray-700'}`}>
+                    <div className={`h-full ${isOwn ? 'bg-white' : 'bg-brand-500'}`} style={{ width: `${progress}%` }}></div>
+                </div>
+                <div className={`flex justify-between text-[10px] mt-1 font-medium ${isOwn ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>
+                    <span>{formatTime(audioRef.current?.currentTime || 0)}</span>
+                    <span>{formatTime(duration)}</span>
+                </div>
+            </div>
+            <audio ref={audioRef} src={src} preload="metadata" className="hidden" />
+        </div>
+    );
 };
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, onEdit, onDelete, onReply, onReact, highlightTerm }) => {
@@ -140,9 +209,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   const attachmentUrl = message.attachment_url || message.image_url;
   const isLegacyBase64 = safeContent.startsWith('data:image');
   const isSticker = message.message_type === 'sticker';
-  const isMedia = (!!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif') && !isSticker;
+  const isAudio = message.message_type === 'audio';
+  const isMedia = (!!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif') && !isSticker && !isAudio;
   
-  const jumboClass = !isMedia && !isSticker && !isDeleted ? getJumboEmojiClass(safeContent) : null;
+  const jumboClass = !isMedia && !isSticker && !isAudio && !isDeleted ? getJumboEmojiClass(safeContent) : null;
 
   const reactionData: { [emoji: string]: { count: number, hasReacted: boolean, users: string[] } } = {};
   let hasReactions = false;
@@ -242,12 +312,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                         <Plus size={18} />
                     </MotionButton>
 
-                    {/* Context Actions inside Menu - Visible on Mobile AND PC now */}
                     <div className="flex items-center gap-1 border-l border-gray-200 dark:border-gray-700 pl-1 ml-1">
                         {onReply && (
                             <button onClick={() => { onReply(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-brand-500 text-gray-400"><Reply size={15}/></button>
                         )}
-                        {isOwn && onEdit && !isMedia && !isSticker && (
+                        {isOwn && onEdit && !isMedia && !isSticker && !isAudio && (
                              <button onClick={() => { onEdit(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-blue-500 text-gray-400"><Pencil size={14}/></button>
                         )}
                         {isOwn && onDelete && (
@@ -276,7 +345,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
             )}
           </AnimatePresence>
 
-          {/* PC Hover Actions Toolbar (Edit/Delete/Reply/React) */}
+          {/* PC Hover Actions Toolbar */}
           {!isDeleted && !showReactionMenu && (
              <div
                 className={`
@@ -291,7 +360,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                     </button>
                  )}
                  
-                 {isOwn && onEdit && !isMedia && !isSticker && (
+                 {isOwn && onEdit && !isMedia && !isSticker && !isAudio && (
                     <button onClick={(e) => { e.stopPropagation(); onEdit(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-blue-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Modifier">
                         <Pencil size={16} />
                     </button>
@@ -334,7 +403,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
               ) : (
                   <>
                       {isSticker ? (
-                        <div className="relative">
+                        <div className="relative inline-block">
                             {!imgLoaded && !imgError && (
                                 <div className="absolute inset-0 flex items-center justify-center">
                                     <Loader2 className="animate-spin text-gray-400" size={20} />
@@ -343,11 +412,20 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                             <img 
                                 src={attachmentUrl || ''} 
                                 alt="Sticker" 
-                                className="w-32 h-32 object-contain hover:scale-105 transition-transform duration-200"
+                                className="w-36 h-36 object-contain hover:scale-105 transition-transform duration-200"
                                 onLoad={() => setImgLoaded(true)}
                                 onError={() => { setImgError(true); setImgLoaded(true); }}
                             />
+                            {/* Sticker Timestamp - Floating Pill */}
+                            <div className="absolute bottom-1 right-1 bg-black/30 backdrop-blur-md text-white text-[10px] font-medium px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                                <span>{new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                {isOwn && (
+                                    isReadByOthers ? <CheckCheck size={10} className="text-white"/> : <Check size={10} className="text-white/80"/>
+                                )}
+                            </div>
                         </div>
+                      ) : isAudio ? (
+                          <AudioMessagePlayer src={attachmentUrl || ''} isOwn={isOwn} />
                       ) : isMedia ? (
                           <div className={`my-1 mb-2 relative w-full bg-gray-100 dark:bg-gray-800/50 rounded-lg overflow-hidden flex items-center justify-center min-h-[150px]`}>
                              {!imgLoaded && !imgError && (
@@ -389,43 +467,50 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
               )}
           </div>
           
-          {/* Timestamp Container */}
-          <div className={`
-              flex items-center justify-end gap-1 mt-1 select-none flex-wrap w-full
-              ${jumboClass || isSticker
-                ? 'text-gray-500 dark:text-gray-400' 
-                : (isOwn ? 'text-brand-100' : 'text-gray-400')
-              } 
-              ${jumboClass ? 'px-2 pb-1' : ''}
-              ${isSticker ? 'bg-black/10 dark:bg-white/10 rounded-full px-2 py-0.5 w-auto self-end inline-flex mt-1 backdrop-blur-sm' : ''}
-          `}>
-            {isEdited && <span className="text-[10px] opacity-80">modifié</span>}
-            <span className={`text-[10px] opacity-80 whitespace-nowrap ${isSticker ? 'text-white font-medium shadow-sm' : ''}`}>
-              {new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </span>
-            {isOwn && !isDeleted && (
-                isReadByOthers 
-                    ? <CheckCheck size={14} className={`${jumboClass || isSticker ? (isSticker ? 'text-white' : 'text-brand-500') : 'text-white'} flex-shrink-0`} /> 
-                    : <Check size={14} className={`${jumboClass || isSticker ? (isSticker ? 'text-white/80' : 'text-gray-400') : 'text-white/60'} flex-shrink-0`} />
-            )}
-          </div>
+          {/* Timestamp Container (Hidden for stickers as they have their own) */}
+          {!isSticker && (
+              <div className={`
+                  flex items-center justify-end gap-1 mt-1 select-none flex-wrap w-full
+                  ${jumboClass
+                    ? 'text-gray-500 dark:text-gray-400' 
+                    : (isOwn ? 'text-brand-100' : 'text-gray-400')
+                  } 
+                  ${jumboClass ? 'px-2 pb-1' : ''}
+              `}>
+                {isEdited && <span className="text-[10px] opacity-80">modifié</span>}
+                <span className="text-[10px] opacity-80 whitespace-nowrap">
+                  {new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+                {isOwn && !isDeleted && (
+                    isReadByOthers 
+                        ? <CheckCheck size={14} className={`${jumboClass ? 'text-brand-500' : 'text-white'} flex-shrink-0`} /> 
+                        : <Check size={14} className={`${jumboClass ? 'text-gray-400' : 'text-white/60'} flex-shrink-0`} />
+                )}
+              </div>
+          )}
 
           {!isDeleted && (
-            <div className={`flex flex-wrap gap-1 mt-2 -mb-5 relative z-20 ${jumboClass || isSticker ? 'mt-0 px-2' : ''}`}>
+            <div className={`flex flex-wrap gap-1.5 mt-2 -mb-5 relative z-20 ${jumboClass || isSticker ? 'mt-0 px-2' : ''}`}>
               {Object.entries(reactionData).map(([emoji, { count, hasReacted, users }]) => (
                 <div key={emoji} className="relative">
-                    <button
-                        onClick={(e) => { e.stopPropagation(); setClickedReactionEmoji(clickedReactionEmoji === emoji ? null : emoji); }}
-                        className={`
-                            px-1.5 py-0.5 rounded-full text-xs shadow-sm flex items-center gap-1 transition-transform hover:scale-105 border
-                            ${hasReacted 
-                                ? 'bg-brand-100 border-brand-200 text-brand-800 dark:bg-brand-900/50 dark:border-brand-800 dark:text-brand-100' 
-                                : 'bg-white border-gray-200 text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300'}
-                        `}
+                    <MotionDiv
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ type: "spring", stiffness: 500, damping: 20 }}
                     >
-                        <span>{emoji}</span>
-                        <span className="font-semibold text-[10px]">{count}</span>
-                    </button>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); setClickedReactionEmoji(clickedReactionEmoji === emoji ? null : emoji); }}
+                            className={`
+                                px-2 py-1 rounded-full text-sm shadow-sm flex items-center gap-1.5 transition-transform hover:scale-110 border
+                                ${hasReacted 
+                                    ? 'bg-brand-100 border-brand-200 text-brand-800 dark:bg-brand-900/50 dark:border-brand-800 dark:text-brand-100' 
+                                    : 'bg-white border-gray-200 text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300'}
+                            `}
+                        >
+                            <span>{emoji}</span>
+                            <span className="font-bold text-xs">{count}</span>
+                        </button>
+                    </MotionDiv>
                     
                     <AnimatePresence>
                         {clickedReactionEmoji === emoji && (

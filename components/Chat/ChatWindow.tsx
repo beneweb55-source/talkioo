@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus, Sticker as StickerIcon } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus, Sticker as StickerIcon, Mic, Trash2, StopCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
 import { GroupManager } from '../Groups/GroupManager'; 
@@ -44,6 +44,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [showMobileMediaMenu, setShowMobileMediaMenu] = useState(false); 
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false); 
 
+  // RECORDING STATE
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<any>(null);
+
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
@@ -57,6 +64,34 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   
   const isInsertingEmojiRef = useRef(false);
+
+  // -- KEYBOARD HANDLING LOGIC --
+  const [viewportHeight, setViewportHeight] = useState('100%');
+
+  useEffect(() => {
+    // This handler ensures the container size matches the visible viewport (minus keyboard)
+    const handleVisualViewportResize = () => {
+        if (window.visualViewport) {
+            setViewportHeight(`${window.visualViewport.height}px`);
+            scrollToBottom('auto');
+        }
+    };
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', handleVisualViewportResize);
+        window.visualViewport.addEventListener('scroll', handleVisualViewportResize);
+        // Set initial
+        setViewportHeight(`${window.visualViewport.height}px`);
+    }
+
+    return () => {
+        if (window.visualViewport) {
+            window.visualViewport.removeEventListener('resize', handleVisualViewportResize);
+            window.visualViewport.removeEventListener('scroll', handleVisualViewportResize);
+        }
+    };
+  }, []);
+  // -----------------------------
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
       requestAnimationFrame(() => {
@@ -272,6 +307,82 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     return () => { unsubscribeMsgs(); unsubscribeTyping(); unsubscribeReads(); unsubscribeReactions(); unsubscribeProfile(); };
   }, [conversation.id, currentUser.id, otherUserId]);
 
+  // -- AUDIO RECORDING LOGIC --
+
+  const startRecording = async () => {
+      try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const recorder = new MediaRecorder(stream);
+          audioChunksRef.current = [];
+
+          recorder.ondataavailable = (event) => {
+              if (event.data.size > 0) audioChunksRef.current.push(event.data);
+          };
+
+          recorder.onstop = () => {
+               // Logic handled in handleSendAudio or cancel
+          };
+
+          recorder.start();
+          mediaRecorderRef.current = recorder;
+          setIsRecording(true);
+          setRecordingDuration(0);
+          
+          recordingTimerRef.current = setInterval(() => {
+              setRecordingDuration(prev => prev + 1);
+          }, 1000);
+
+      } catch (err) {
+          console.error("Mic error:", err);
+          alert("Impossible d'accéder au micro.");
+      }
+  };
+
+  const stopRecording = () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+          mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      }
+      setIsRecording(false);
+      if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+      }
+  };
+
+  const cancelRecording = () => {
+      stopRecording();
+      audioChunksRef.current = []; // Discard chunks
+  };
+
+  const handleSendAudio = async () => {
+      stopRecording();
+      // Wait a bit for onstop/ondataavailable to fire
+      setTimeout(async () => {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          if (audioBlob.size === 0) return;
+          
+          const audioFile = new File([audioBlob], "voice_message.webm", { type: 'audio/webm' });
+          
+          setIsSending(true);
+          try {
+              await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'audio', audioFile);
+          } catch (err) {
+              console.error("Audio send failed", err);
+          } finally {
+              setIsSending(false);
+          }
+      }, 200);
+  };
+
+  const formatDuration = (seconds: number) => {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // ---------------------------
+
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setInputText(e.target.value);
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -435,9 +546,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   const isOnline = otherUserId && onlineUsers.has(otherUserId);
   const canSend = (inputText.trim().length > 0 || selectedFile !== null) && !isSending;
+  // Show Mic if input is empty and no file selected
+  const showMic = !inputText.trim() && !selectedFile && !isSending && !isRecording;
 
   return (
-    <div className="flex flex-col h-full relative bg-[#e5ddd5] dark:bg-[#0b141a]">
+    <div 
+        className="flex flex-col relative bg-[#e5ddd5] dark:bg-[#0b141a]"
+        style={{ height: viewportHeight }}
+    >
         <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" 
              style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
 
@@ -647,88 +763,115 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             </AnimatePresence>
 
             <div className="flex items-end gap-2 px-2 pb-2">
-                <div className="flex-shrink-0 mb-1 flex gap-2 items-center">
-                    {/* Emoji Button - Always visible */}
-                     <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowStickerPicker(false); setShowMobileMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                        <Smile size={24} />
-                     </button>
-                     
-                     {/* Desktop: Direct Buttons */}
-                     <div className="hidden md:flex gap-2">
-                         <button onClick={() => { setShowGifPicker(!showGifPicker); setShowStickerPicker(false); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`gif-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showGifPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                            <StickyNote size={24} />
-                         </button>
-                         <button onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`sticker-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showStickerPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                            <StickerIcon size={24} />
-                         </button>
-                        <button onClick={() => fileInputRef.current?.click()} className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${selectedFile ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                            <Image size={24} />
-                        </button>
-                     </div>
+                {isRecording ? (
+                    <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-red-500/30 flex items-center px-4 h-[50px] animate-pulse">
+                        <div className="h-3 w-3 bg-red-500 rounded-full animate-bounce mr-3"></div>
+                        <span className="flex-1 text-red-500 font-bold font-mono">{formatDuration(recordingDuration)}</span>
+                        <div className="text-xs text-gray-400 mr-2 uppercase font-semibold tracking-wider">Enregistrement...</div>
+                    </div>
+                ) : (
+                    <>
+                        <div className="flex-shrink-0 mb-1 flex gap-2 items-center">
+                            {/* Emoji Button - Always visible */}
+                            <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowStickerPicker(false); setShowMobileMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                                <Smile size={24} />
+                            </button>
+                            
+                            {/* Desktop: Direct Buttons */}
+                            <div className="hidden md:flex gap-2">
+                                <button onClick={() => { setShowGifPicker(!showGifPicker); setShowStickerPicker(false); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`gif-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showGifPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                                    <StickyNote size={24} />
+                                </button>
+                                <button onClick={() => { setShowStickerPicker(!showStickerPicker); setShowGifPicker(false); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`sticker-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showStickerPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                                    <StickerIcon size={24} />
+                                </button>
+                                <button onClick={() => fileInputRef.current?.click()} className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${selectedFile ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                                    <Image size={24} />
+                                </button>
+                            </div>
 
-                     {/* Mobile: Plus Button */}
-                     <div className="md:hidden relative">
-                         <button 
-                            className={`mobile-plus-btn h-10 w-10 rounded-full flex items-center justify-center transition-all shadow-sm ${showMobileMediaMenu ? 'bg-brand-100 text-brand-600 rotate-45' : 'bg-gray-100 text-gray-500'}`}
-                            onClick={() => setShowMobileMediaMenu(!showMobileMediaMenu)}
-                         >
-                            <Plus size={24} />
-                         </button>
-                         <AnimatePresence>
-                             {showMobileMediaMenu && (
-                                 <MotionDiv 
-                                     ref={mobileMenuRef}
-                                     initial={{ opacity: 0, scale: 0.9, y: 10 }}
-                                     animate={{ opacity: 1, scale: 1, y: -5 }}
-                                     exit={{ opacity: 0, scale: 0.9, y: 10 }}
-                                     className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 shadow-xl rounded-xl border border-gray-100 dark:border-gray-700 p-2 flex flex-col gap-2 min-w-[140px] z-50"
-                                 >
-                                    <button 
-                                        onClick={() => { setShowMobileMediaMenu(false); setShowGifPicker(true); }} 
-                                        className="mobile-media-btn flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                    >
-                                        <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg"><StickyNote size={18}/></div>
-                                        GIF
-                                    </button>
-                                    <button 
-                                        onClick={() => { setShowMobileMediaMenu(false); setShowStickerPicker(true); }} 
-                                        className="mobile-media-btn flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                    >
-                                        <div className="p-1.5 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-lg"><StickerIcon size={18}/></div>
-                                        Sticker
-                                    </button>
-                                    <button 
-                                        onClick={() => { setShowMobileMediaMenu(false); fileInputRef.current?.click(); }} 
-                                        className="flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                    >
-                                        <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg"><Image size={18}/></div>
-                                        Galerie
-                                    </button>
-                                 </MotionDiv>
-                             )}
-                         </AnimatePresence>
-                     </div>
+                            {/* Mobile: Plus Button */}
+                            <div className="md:hidden relative">
+                                <button 
+                                    className={`mobile-plus-btn h-10 w-10 rounded-full flex items-center justify-center transition-all shadow-sm ${showMobileMediaMenu ? 'bg-brand-100 text-brand-600 rotate-45' : 'bg-gray-100 text-gray-500'}`}
+                                    onClick={() => setShowMobileMediaMenu(!showMobileMediaMenu)}
+                                >
+                                    <Plus size={24} />
+                                </button>
+                                <AnimatePresence>
+                                    {showMobileMediaMenu && (
+                                        <MotionDiv 
+                                            ref={mobileMenuRef}
+                                            initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                                            animate={{ opacity: 1, scale: 1, y: -5 }}
+                                            exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                                            className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 shadow-xl rounded-xl border border-gray-100 dark:border-gray-700 p-2 flex flex-col gap-2 min-w-[140px] z-50"
+                                        >
+                                            <button 
+                                                onClick={() => { setShowMobileMediaMenu(false); setShowGifPicker(true); }} 
+                                                className="mobile-media-btn flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                            >
+                                                <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg"><StickyNote size={18}/></div>
+                                                GIF
+                                            </button>
+                                            <button 
+                                                onClick={() => { setShowMobileMediaMenu(false); setShowStickerPicker(true); }} 
+                                                className="mobile-media-btn flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                            >
+                                                <div className="p-1.5 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-lg"><StickerIcon size={18}/></div>
+                                                Sticker
+                                            </button>
+                                            <button 
+                                                onClick={() => { setShowMobileMediaMenu(false); fileInputRef.current?.click(); }} 
+                                                className="flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                            >
+                                                <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg"><Image size={18}/></div>
+                                                Galerie
+                                            </button>
+                                        </MotionDiv>
+                                    )}
+                                </AnimatePresence>
+                            </div>
 
-                    <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/gif,image/webp" onChange={handleImageSelect} />
-                </div>
+                            <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/gif,image/webp" onChange={handleImageSelect} />
+                        </div>
 
-                <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-gray-200 dark:border-gray-800 flex items-end overflow-hidden min-h-[50px]">
-                    <textarea
-                        ref={textareaRef}
-                        value={inputText}
-                        onChange={handleInputChange}
-                        onKeyDown={handleKeyDown}
-                        onFocus={handleInputFocus}
-                        rows={1}
-                        placeholder={selectedFile ? "Ajouter une légende..." : "Écrivez votre message..."}
-                        className="w-full bg-transparent border-none outline-none text-gray-800 dark:text-white px-4 py-3.5 placeholder-gray-400 resize-none max-h-[120px] overflow-y-auto leading-relaxed scrollbar-hide"
-                        style={{ minHeight: '50px' }}
-                    />
-                </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-gray-200 dark:border-gray-800 flex items-end overflow-hidden min-h-[50px]">
+                            <textarea
+                                ref={textareaRef}
+                                value={inputText}
+                                onChange={handleInputChange}
+                                onKeyDown={handleKeyDown}
+                                onFocus={handleInputFocus}
+                                rows={1}
+                                placeholder={selectedFile ? "Ajouter une légende..." : "Écrivez votre message..."}
+                                className="w-full bg-transparent border-none outline-none text-gray-800 dark:text-white px-4 py-3.5 placeholder-gray-400 resize-none max-h-[120px] overflow-y-auto leading-relaxed scrollbar-hide"
+                                style={{ minHeight: '50px' }}
+                            />
+                        </div>
+                    </>
+                )}
 
-                <MotionButton whileHover={{ scale: canSend ? 1.05 : 1 }} whileTap={{ scale: canSend ? 0.95 : 1 }} disabled={!canSend} onClick={handleSendMessage} className={`flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md transition-all duration-200 ${canSend ? 'bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600' : 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'}`}>
-                    {isSending ? <Loader2 size={20} className="animate-spin text-white" /> : <Send size={20} className={`ml-0.5 ${canSend ? 'text-white' : 'text-gray-400'}`} />}
-                </MotionButton>
+                {isRecording ? (
+                    <div className="flex gap-2">
+                         <MotionButton whileTap={{ scale: 0.9 }} onClick={cancelRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center bg-gray-200 hover:bg-red-100 dark:bg-gray-800 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500 transition-colors">
+                            <Trash2 size={24} />
+                        </MotionButton>
+                        <MotionButton whileTap={{ scale: 0.95 }} onClick={handleSendAudio} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-red-500 text-white hover:bg-red-600 transition-colors">
+                            <Send size={20} />
+                        </MotionButton>
+                    </div>
+                ) : (
+                    showMic ? (
+                         <MotionButton whileTap={{ scale: 0.95 }} onClick={startRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600 transition-all">
+                             <Mic size={24} />
+                         </MotionButton>
+                    ) : (
+                        <MotionButton whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} disabled={!canSend} onClick={handleSendMessage} className={`flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md transition-all duration-200 ${canSend ? 'bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600' : 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'}`}>
+                            {isSending ? <Loader2 size={20} className="animate-spin text-white" /> : <Send size={20} className={`ml-0.5 ${canSend ? 'text-white' : 'text-gray-400'}`} />}
+                        </MotionButton>
+                    )
+                )}
             </div>
         </div>
     </div>

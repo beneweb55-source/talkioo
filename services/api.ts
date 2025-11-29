@@ -1,6 +1,3 @@
-
-
-
 import { io, Socket } from 'socket.io-client';
 import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction, GroupMember, Sticker } from '../types';
 
@@ -195,11 +192,11 @@ export const getMessagesAPI = async (conversationId: string): Promise<Message[]>
     return await fetchWithAuth(`/conversations/${conversationId}/messages`);
 };
 
-export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image'|'gif'|'sticker' = 'text', file?: File, attachmentUrl?: string): Promise<Message> => {
+export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType: 'text'|'image'|'gif'|'sticker'|'audio' = 'text', file?: File, attachmentUrl?: string): Promise<Message> => {
     
     if (file) {
         // Validation Size (Double check client-side)
-        if (file.size > 10 * 1024 * 1024) throw new Error("Image trop volumineuse (Max 10Mo)");
+        if (file.size > 50 * 1024 * 1024) throw new Error("Fichier trop volumineux (Max 50Mo)");
         
         const formData = new FormData();
         formData.append('conversation_id', conversationId);
@@ -207,6 +204,7 @@ export const sendMessageAPI = async (conversationId: string, userId: string, con
         formData.append('content', safeContent);
         if (repliedToId) formData.append('replied_to_message_id', repliedToId);
         formData.append('media', file);
+        formData.append('message_type', messageType); // Important: pass the type (audio/image)
         return await fetchWithAuth('/messages', { method: 'POST', body: formData });
     } else {
         return await fetchWithAuth('/messages', { 

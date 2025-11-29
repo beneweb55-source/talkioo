@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
 import { GroupManager } from '../Groups/GroupManager'; 
@@ -39,6 +39,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   const [showInputEmoji, setShowInputEmoji] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false); // NEW STATE
+  const [showMobileMediaMenu, setShowMobileMediaMenu] = useState(false); // Mobile Menu State
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false); 
 
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
@@ -49,7 +50,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
-  const gifPickerRef = useRef<HTMLDivElement>(null); // NEW REF
+  const gifPickerRef = useRef<HTMLDivElement>(null); 
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
   
   const isInsertingEmojiRef = useRef(false);
 
@@ -124,8 +126,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             setShowInputEmoji(false);
         }
         if (gifPickerRef.current && !gifPickerRef.current.contains(event.target as Node) && 
-            !(event.target as Element).closest('.gif-toggle-btn')) {
+            !(event.target as Element).closest('.gif-toggle-btn') && 
+            !(event.target as Element).closest('.mobile-media-btn')) { // Check mobile media button too
             setShowGifPicker(false);
+        }
+        if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node) &&
+            !(event.target as Element).closest('.mobile-plus-btn')) {
+            setShowMobileMediaMenu(false);
         }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -150,6 +157,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       if (!isInsertingEmojiRef.current) {
           setShowInputEmoji(false);
           setShowGifPicker(false);
+          setShowMobileMediaMenu(false);
       }
       setTimeout(() => scrollToBottom('auto'), 100);
       setTimeout(() => scrollToBottom('auto'), 300);
@@ -329,6 +337,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     setIsSending(true);
     setShowInputEmoji(false);
     setShowGifPicker(false);
+    setShowMobileMediaMenu(false);
     
     if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
@@ -604,16 +613,58 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             </AnimatePresence>
 
             <div className="flex items-end gap-2 px-2 pb-2">
-                <div className="flex-shrink-0 mb-1 flex gap-2">
-                     <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                <div className="flex-shrink-0 mb-1 flex gap-2 items-center">
+                    {/* Emoji Button - Always visible */}
+                     <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowMobileMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
                         <Smile size={24} />
                      </button>
-                     <button onClick={() => { setShowGifPicker(!showGifPicker); setShowInputEmoji(false); }} className={`gif-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showGifPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                        <StickyNote size={24} />
-                     </button>
-                    <button onClick={() => fileInputRef.current?.click()} className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${selectedFile ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                        <Image size={24} />
-                    </button>
+                     
+                     {/* Desktop: Direct Buttons */}
+                     <div className="hidden md:flex gap-2">
+                         <button onClick={() => { setShowGifPicker(!showGifPicker); setShowInputEmoji(false); setShowMobileMediaMenu(false); }} className={`gif-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showGifPicker ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                            <StickyNote size={24} />
+                         </button>
+                        <button onClick={() => fileInputRef.current?.click()} className={`h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${selectedFile ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
+                            <Image size={24} />
+                        </button>
+                     </div>
+
+                     {/* Mobile: Plus Button */}
+                     <div className="md:hidden relative">
+                         <button 
+                            className={`mobile-plus-btn h-10 w-10 rounded-full flex items-center justify-center transition-all shadow-sm ${showMobileMediaMenu ? 'bg-brand-100 text-brand-600 rotate-45' : 'bg-gray-100 text-gray-500'}`}
+                            onClick={() => setShowMobileMediaMenu(!showMobileMediaMenu)}
+                         >
+                            <Plus size={24} />
+                         </button>
+                         <AnimatePresence>
+                             {showMobileMediaMenu && (
+                                 <MotionDiv 
+                                     ref={mobileMenuRef}
+                                     initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                                     animate={{ opacity: 1, scale: 1, y: -5 }}
+                                     exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                                     className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 shadow-xl rounded-xl border border-gray-100 dark:border-gray-700 p-2 flex flex-col gap-2 min-w-[140px] z-50"
+                                 >
+                                    <button 
+                                        onClick={() => { setShowMobileMediaMenu(false); setShowGifPicker(true); }} 
+                                        className="mobile-media-btn flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                    >
+                                        <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg"><StickyNote size={18}/></div>
+                                        GIF
+                                    </button>
+                                    <button 
+                                        onClick={() => { setShowMobileMediaMenu(false); fileInputRef.current?.click(); }} 
+                                        className="flex items-center gap-3 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
+                                    >
+                                        <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg"><Image size={18}/></div>
+                                        Galerie
+                                    </button>
+                                 </MotionDiv>
+                             )}
+                         </AnimatePresence>
+                     </div>
+
                     <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/gif,image/webp" onChange={handleImageSelect} />
                 </div>
 

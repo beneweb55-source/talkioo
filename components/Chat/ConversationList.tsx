@@ -4,6 +4,8 @@ import { getOtherParticipant } from '../../services/api';
 import { Users, User as UserIcon, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+const MotionDiv = motion.div as any;
+
 interface ConversationListProps {
   conversations: Conversation[];
   activeId: string | null;
@@ -11,6 +13,7 @@ interface ConversationListProps {
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onlineUsers: Set<string>;
+  searchTerm?: string; // New prop
 }
 
 export const ConversationList: React.FC<ConversationListProps> = ({ 
@@ -19,14 +22,24 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   onSelect,
   onDelete,
   currentUser,
-  onlineUsers
+  onlineUsers,
+  searchTerm = ''
 }) => {
   
+  const filtered = conversations.filter(c => {
+      if (!searchTerm) return true;
+      const term = searchTerm.toLowerCase();
+      // Basic check
+      if (c.name && c.name.toLowerCase().includes(term)) return true;
+      if (c.last_message && c.last_message.toLowerCase().includes(term)) return true;
+      return false;
+  });
+
   return (
-    <div className="flex-1 overflow-y-auto no-scrollbar px-2 py-2 space-y-1">
+    <div className="flex-1 overflow-y-auto no-scrollbar px-2 py-2 space-y-1 pb-20 md:pb-2">
       <AnimatePresence>
-        {conversations.length === 0 && (
-            <motion.div 
+        {filtered.length === 0 && (
+            <MotionDiv 
                 initial={{ opacity: 0 }} 
                 animate={{ opacity: 1 }}
                 className="p-8 text-center"
@@ -34,12 +47,11 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                 <div className="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-3 text-gray-400">
                     <Users size={24} />
                 </div>
-                <p className="text-gray-500 text-sm font-medium">Aucune conversation</p>
-                <p className="text-gray-400 text-xs mt-1">Démarrez un chat pour commencer</p>
-            </motion.div>
+                <p className="text-gray-500 text-sm font-medium">Aucune conversation trouvée</p>
+            </MotionDiv>
         )}
-        {conversations.map((conv, i) => (
-            <motion.div
+        {filtered.map((conv, i) => (
+            <MotionDiv
                 key={conv.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -53,7 +65,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     onDelete={onDelete} 
                     onlineUsers={onlineUsers}
                 />
-            </motion.div>
+            </MotionDiv>
         ))}
       </AnimatePresence>
     </div>
@@ -69,12 +81,19 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
             if (conv.is_group) {
                 setName(conv.name);
             } else {
+                // If the name from props is already a "User#1234" format (backend optimization), use it
+                if (conv.name && conv.name.includes('#')) {
+                    setName(conv.name);
+                    // We still might want the ID for online status though...
+                    // Ideally backend sends other_participant_id
+                } 
+                
                 const other = await getOtherParticipant(conv.id, currentUser.id);
                 if (other) {
                     setName(`${other.username}#${other.tag}`);
                     setOtherUserId(other.id);
                 } else {
-                    setName('Utilisateur Inconnu');
+                    if (!conv.name || !conv.name.includes('#')) setName('Utilisateur Inconnu');
                 }
             }
         };
@@ -91,7 +110,7 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
     };
 
     return (
-        <motion.div 
+        <MotionDiv 
             onClick={() => onSelect(conv.id)}
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.98 }}
@@ -102,7 +121,8 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                     : 'hover:bg-white dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200'}
             `}
         >
-            <div className="flex items-center gap-3 overflow-hidden relative z-10 w-full">
+            {/* Added pr-14 to firmly prevent text from going under the delete button */}
+            <div className="flex items-center gap-3 overflow-hidden relative z-10 w-full pr-14">
                 <div className="relative flex-shrink-0">
                     <div className={`
                         h-12 w-12 rounded-full flex items-center justify-center text-lg font-bold shadow-sm
@@ -117,7 +137,7 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                     )}
                 </div>
                 
-                <div className="flex flex-col overflow-hidden flex-1 min-w-0">
+                <div className="flex flex-col overflow-hidden flex-1 min-w-0 pr-1">
                     <div className="flex justify-between items-baseline">
                         <span className={`font-semibold text-sm truncate ${isActive ? 'text-white' : 'text-gray-900 dark:text-gray-100'}`}>
                             {name}
@@ -127,7 +147,7 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
                         </span>
                     </div>
                     <div className="flex justify-between items-center mt-0.5">
-                        <span className={`text-xs truncate max-w-[85%] ${isActive ? 'text-brand-100' : 'text-gray-500 dark:text-gray-400'}`}>
+                        <span className={`text-xs truncate max-w-[95%] ${isActive ? 'text-brand-100' : 'text-gray-500 dark:text-gray-400'}`}>
                             {conv.last_message}
                         </span>
                     </div>
@@ -137,11 +157,11 @@ const ConversationItem = ({ conv, currentUser, isActive, onSelect, onDelete, onl
             {!isActive && (
                 <button 
                     onClick={handleDelete} 
-                    className="absolute right-2 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full opacity-0 group-hover:opacity-100 transition-all z-20"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full opacity-0 group-hover:opacity-100 transition-all z-20"
                 >
                     <Trash2 size={16} />
                 </button>
             )}
-        </motion.div>
+        </MotionDiv>
     );
 };

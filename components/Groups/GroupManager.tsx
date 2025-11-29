@@ -6,6 +6,8 @@ import { updateGroup, addMembers, removeMember, leaveGroup } from '../../service
 import { Users, UserPlus, Trash2, LogOut, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+const MotionDiv = motion.div as any;
+
 interface GroupManagerProps {
   conversation: Conversation;
   currentUser: User;
@@ -108,7 +110,7 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
 
         <AnimatePresence>
           {isAddMode && (
-            <motion.div 
+            <MotionDiv 
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
@@ -131,7 +133,7 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
               <Button onClick={handleAddMembers} isLoading={isLoading} className="mt-2 text-xs py-1.5">
                 Confirmer l'ajout
               </Button>
-            </motion.div>
+            </MotionDiv>
           )}
         </AnimatePresence>
 

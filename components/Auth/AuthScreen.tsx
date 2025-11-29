@@ -6,6 +6,9 @@ import { Input } from '../ui/Input';
 import { CloudLightning } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+// Casting motion.div to any to bypass strict type checking issues
+const MotionDiv = motion.div as any;
+
 export const AuthScreen: React.FC = () => {
   const { login } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
@@ -52,7 +55,7 @@ export const AuthScreen: React.FC = () => {
         <div className="absolute bottom-[-20%] right-[-10%] w-[500px] h-[500px] bg-blue-400/20 rounded-full blur-[100px] animate-pulse delay-1000" />
       </div>
 
-      <motion.div 
+      <MotionDiv 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
@@ -61,16 +64,16 @@ export const AuthScreen: React.FC = () => {
         <div className="bg-white/70 dark:bg-gray-900/60 backdrop-blur-xl border border-white/50 dark:border-gray-800 rounded-3xl shadow-2xl overflow-hidden p-8">
           
           <div className="flex flex-col items-center mb-8">
-            <motion.div 
+            <MotionDiv 
               whileHover={{ rotate: 10, scale: 1.1 }}
               className="h-16 w-16 bg-gradient-to-br from-brand-500 to-red-600 rounded-2xl shadow-lg flex items-center justify-center mb-4"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-8 h-8 text-white">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
               </svg>
-            </motion.div>
+            </MotionDiv>
             <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-400">
-              Bienvenue sur Evo
+              Bienvenue sur Evo Me
             </h2>
             <p className="text-gray-500 dark:text-gray-400 text-sm mt-2">
               {isLogin ? 'Ravis de vous revoir !' : 'Commencez l\'expérience aujourd\'hui'}
@@ -80,7 +83,7 @@ export const AuthScreen: React.FC = () => {
           <form className="space-y-4" onSubmit={handleSubmit}>
             <AnimatePresence mode='wait'>
                 {!isLogin && (
-                <motion.div
+                <MotionDiv
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
@@ -94,7 +97,7 @@ export const AuthScreen: React.FC = () => {
                         onChange={(e) => setUsername(e.target.value)}
                         placeholder="ex: Alex"
                     />
-                </motion.div>
+                </MotionDiv>
                 )}
             </AnimatePresence>
             
@@ -104,7 +107,7 @@ export const AuthScreen: React.FC = () => {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="hello@evo.app"
+              placeholder="hello@evome.app"
             />
             
             <div className="relative">
@@ -120,26 +123,26 @@ export const AuthScreen: React.FC = () => {
 
             <AnimatePresence>
                 {error && (
-                <motion.div 
+                <MotionDiv 
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
                     className="text-red-600 text-sm bg-red-50 dark:bg-red-500/10 dark:text-red-400 p-3 rounded-xl border border-red-100 dark:border-red-500/20 text-center"
                 >
                     {error}
-                </motion.div>
+                </MotionDiv>
                 )}
             </AnimatePresence>
 
             {showWakeUpMessage && (
-                <motion.div 
+                <MotionDiv 
                     initial={{ opacity: 0 }} 
                     animate={{ opacity: 1 }}
                     className="text-blue-600 text-xs bg-blue-50 dark:bg-blue-900/20 dark:text-blue-400 p-3 rounded-xl border border-blue-100 dark:border-blue-900/30 flex items-start gap-2"
                 >
                     <CloudLightning className="flex-shrink-0" size={14} />
                     <span>Le serveur sort de veille (30s)... 🚀</span>
-                </motion.div>
+                </MotionDiv>
             )}
 
             <div className="pt-2">
@@ -162,7 +165,7 @@ export const AuthScreen: React.FC = () => {
              </button>
           </div>
         </div>
-      </motion.div>
+      </MotionDiv>
     </div>
   );
 };

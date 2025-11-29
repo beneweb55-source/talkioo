@@ -2,9 +2,12 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
-import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile } from 'lucide-react';
+import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
+
+const MotionDiv = motion.div as any;
+const MotionButton = motion.button as any;
 
 interface ChatWindowProps {
   conversation: Conversation;
@@ -19,6 +22,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [loading, setLoading] = useState(true);
   const [headerName, setHeaderName] = useState('');
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
+  
+  // Search State
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState<string[]>([]); // Array of message IDs that match
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0); // Index in searchMatches
+  const searchInputRef = useRef<HTMLInputElement>(null);
   
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -49,6 +59,60 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   }, [inputText]);
 
   useEffect(() => {
+      if (isSearchOpen && searchInputRef.current) {
+          searchInputRef.current.focus();
+      }
+      if (!isSearchOpen) {
+          setSearchQuery('');
+          setSearchMatches([]);
+          setCurrentMatchIndex(0);
+      }
+  }, [isSearchOpen]);
+
+  // Handle Search Logic
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+        setSearchMatches([]);
+        return;
+    }
+
+    const term = searchQuery.toLowerCase();
+    const matches = messages
+        .filter(m => m.content && m.content.toLowerCase().includes(term))
+        .map(m => m.id);
+    
+    setSearchMatches(matches);
+    
+    // Automatically jump to the LAST match (most recent) when typing
+    if (matches.length > 0) {
+        setCurrentMatchIndex(matches.length - 1);
+        scrollToMessage(matches[matches.length - 1]);
+    }
+  }, [searchQuery, messages]);
+
+  const scrollToMessage = (messageId: string) => {
+      const el = document.getElementById(`msg-${messageId}`);
+      if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Optional: Add a flash effect or animation here via DOM manipulation if desired
+      }
+  };
+
+  const handleNextMatch = () => {
+      if (searchMatches.length === 0) return;
+      const nextIndex = (currentMatchIndex + 1) % searchMatches.length;
+      setCurrentMatchIndex(nextIndex);
+      scrollToMessage(searchMatches[nextIndex]);
+  };
+
+  const handlePrevMatch = () => {
+      if (searchMatches.length === 0) return;
+      const prevIndex = (currentMatchIndex - 1 + searchMatches.length) % searchMatches.length;
+      setCurrentMatchIndex(prevIndex);
+      scrollToMessage(searchMatches[prevIndex]);
+  };
+
+  useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
         if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node) && 
             !(event.target as Element).closest('.emoji-toggle-btn')) {
@@ -61,7 +125,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   useEffect(() => {
       if (window.visualViewport) {
-          const handleResize = () => scrollToBottom('auto');
+          const handleResize = () => {
+              if (!isSearchOpen) scrollToBottom('auto');
+          };
           window.visualViewport.addEventListener('resize', handleResize);
           window.visualViewport.addEventListener('scroll', handleResize);
           return () => {
@@ -69,7 +135,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
               window.visualViewport?.removeEventListener('scroll', handleResize);
           };
       }
-  }, []);
+  }, [isSearchOpen]);
 
   const handleInputFocus = () => {
       setShowInputEmoji(false);
@@ -100,6 +166,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     setTypingUsers(new Set());
     setSelectedFile(null);
     setImagePreview(null);
+    setIsSearchOpen(false);
     
     const fetchAndMark = async () => {
         try {
@@ -113,17 +180,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     fetchAndMark();
 
     const unsubscribeMsgs = subscribeToMessages(conversation.id, (newMessage) => {
-        console.log("[FRONTEND SOCKET] REÇU:", newMessage);
-        
-        if (newMessage.sender_id === currentUser.id) {
-            console.log("[FRONTEND SOCKET] URL présente ?", newMessage.attachment_url);
-        }
-
         setMessages(prev => {
             const exists = prev.find(m => m.id === newMessage.id);
             if (exists) {
                 if (exists.attachment_url && !newMessage.attachment_url) {
-                    console.warn("[FRONTEND] Conservation de l'URL existante pour éviter écrasement par Socket vide");
                     return prev.map(m => m.id === newMessage.id ? { 
                         ...newMessage, 
                         attachment_url: exists.attachment_url,
@@ -135,7 +195,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             return [...prev, newMessage];
         });
         
-        scrollToBottom('smooth');
+        // Only scroll if not searching/scrolling up
+        if (!isSearchOpen) scrollToBottom('smooth');
+        
         if (newMessage.sender_id !== currentUser.id) markMessagesAsReadAPI(conversation.id);
     });
 
@@ -151,7 +213,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             if (isTyping) next.add(userId); else next.delete(userId);
             return next;
         });
-        if(isTyping) scrollToBottom('smooth');
+        if(isTyping && !isSearchOpen) scrollToBottom('smooth');
     });
     
     const unsubscribeReads = subscribeToReadReceipts(conversation.id, () => getMessagesAPI(conversation.id).then(setMessages));
@@ -173,7 +235,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     const cursor = textareaRef.current?.selectionStart || inputText.length;
     const text = inputText.slice(0, cursor) + emojiData.emoji + inputText.slice(cursor);
     setInputText(text);
-    
     setTimeout(() => {
         if(textareaRef.current) {
             textareaRef.current.focus();
@@ -205,7 +266,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             e.target.value = ''; 
             return;
         }
-
         const previewUrl = URL.createObjectURL(file);
         setSelectedFile(file);
         setImagePreview(previewUrl);
@@ -220,11 +280,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   };
 
   const handleReaction = async (msg: Message, emoji: string) => {
-      try {
-          await reactToMessageAPI(msg.id, emoji);
-      } catch (error) {
-          console.error("Reaction failed", error);
-      }
+      try { await reactToMessageAPI(msg.id, emoji); } 
+      catch (error) { console.error("Reaction failed", error); }
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -248,10 +305,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     setSelectedFile(null);
     setImagePreview(null);
     setReplyingTo(null);
-    if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
-        textareaRef.current.focus();
-    }
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     const tempId = 'temp_' + Date.now();
     const optimisticMsg: Message = {
@@ -289,7 +343,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 const alreadyExists = prev.find(m => m.id === newMessage.id);
                 if (alreadyExists) {
                     if (!alreadyExists.attachment_url && newMessage.attachment_url) {
-                         console.warn("[FRONTEND] Correction du message Socket incomplet via réponse API");
                          return prev.map(m => m.id === newMessage.id ? newMessage : m).filter(m => m.id !== tempId);
                     }
                     return prev.filter(m => m.id !== tempId);
@@ -319,64 +372,113 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" 
              style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
 
+        {/* Header */}
         <div className="h-[70px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-gray-800/50 flex items-center justify-between px-4 z-20 shadow-sm flex-shrink-0">
-            <div className="flex items-center gap-3">
-                <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10">
-                    <ArrowLeft size={22} />
-                </button>
-                <div className="relative">
-                    <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md">
-                        {headerName?.charAt(0).toUpperCase()}
+            {isSearchOpen ? (
+                <div className="flex-1 flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="flex-1 relative">
+                        <input 
+                            ref={searchInputRef}
+                            type="text" 
+                            placeholder="Rechercher..." 
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full bg-gray-100 dark:bg-gray-800 border-none rounded-xl py-2 pl-4 pr-12 focus:ring-2 focus:ring-brand-500/20 text-sm outline-none dark:text-white"
+                        />
+                        {searchMatches.length > 0 && (
+                             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                                <span className="text-xs text-gray-400 mr-1">
+                                    {currentMatchIndex + 1}/{searchMatches.length}
+                                </span>
+                                <div className="flex bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden">
+                                    <button onClick={handlePrevMatch} className="p-1 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300">
+                                        <ChevronUp size={14} />
+                                    </button>
+                                    <div className="w-[1px] bg-gray-300 dark:bg-gray-600"></div>
+                                    <button onClick={handleNextMatch} className="p-1 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300">
+                                        <ChevronDown size={14} />
+                                    </button>
+                                </div>
+                             </div>
+                        )}
                     </div>
-                    {isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
+                    <button onClick={() => setIsSearchOpen(false)} className="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full">
+                        <X size={20} />
+                    </button>
                 </div>
-                <div>
-                    <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight">{headerName}</h2>
-                    <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">
-                        {conversation.is_group ? 'Groupe' : (isOnline ? 'En ligne' : 'Hors ligne')}
-                    </p>
-                </div>
-            </div>
-            <div className="flex gap-3 text-brand-600 dark:text-brand-400">
-                <Video className="w-5 h-5 cursor-pointer hover:opacity-70" />
-                <Phone className="w-5 h-5 cursor-pointer hover:opacity-70" />
-            </div>
+            ) : (
+                <>
+                    <div className="flex items-center gap-3">
+                        <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10">
+                            <ArrowLeft size={22} />
+                        </button>
+                        <div className="relative">
+                            <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md">
+                                {headerName?.charAt(0).toUpperCase()}
+                            </div>
+                            {isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
+                        </div>
+                        <div>
+                            <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight">{headerName}</h2>
+                            <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">
+                                {conversation.is_group ? 'Groupe' : (isOnline ? 'En ligne' : 'Hors ligne')}
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex gap-1 text-brand-600 dark:text-brand-400">
+                        <button onClick={() => setIsSearchOpen(true)} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors">
+                            <Search size={20} />
+                        </button>
+                        <button className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors hidden sm:block">
+                            <Video size={20} />
+                        </button>
+                        <button className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors hidden sm:block">
+                            <Phone size={20} />
+                        </button>
+                    </div>
+                </>
+            )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-2 z-10 no-scrollbar">
+        {/* Messages List */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-2 z-10 no-scrollbar relative">
             {loading ? (
                 <div className="flex justify-center mt-10"><Loader2 className="animate-spin text-brand-500" size={32} /></div>
             ) : (
-                messages.map(msg => (
-                    <MessageBubble 
-                        key={msg.id} 
-                        message={msg} 
-                        isOwn={msg.sender_id === currentUser.id}
-                        onEdit={(m) => { setEditingMessage(m); setInputText(m.content); setReplyingTo(null); cancelImage(); }}
-                        onDelete={async (m) => { if(window.confirm('Supprimer ?')) await deleteMessageAPI(m.id); }}
-                        onReply={(m) => { setReplyingTo(m); setEditingMessage(null); textareaRef.current?.focus(); }}
-                        onReact={handleReaction}
-                    />
-                ))
+                <>
+                    {messages.map(msg => (
+                        <MessageBubble 
+                            key={msg.id} 
+                            message={msg} 
+                            isOwn={msg.sender_id === currentUser.id}
+                            onEdit={(m) => { setEditingMessage(m); setInputText(m.content); setReplyingTo(null); cancelImage(); }}
+                            onDelete={async (m) => { if(window.confirm('Supprimer ?')) await deleteMessageAPI(m.id); }}
+                            onReply={(m) => { setReplyingTo(m); setEditingMessage(null); textareaRef.current?.focus(); }}
+                            onReact={handleReaction}
+                            highlightTerm={searchQuery} // Pass highlight term
+                        />
+                    ))}
+                </>
             )}
             <AnimatePresence>
             {typingUsers.size > 0 && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex justify-start">
+                <MotionDiv initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex justify-start">
                     <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-2xl rounded-tl-sm shadow-sm flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce"></span>
                         <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce delay-100"></span>
                         <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce delay-200"></span>
                     </div>
-                </motion.div>
+                </MotionDiv>
             )}
             </AnimatePresence>
             <div ref={messagesEndRef} />
         </div>
 
+        {/* Input Area */}
         <div className="p-2 z-20 bg-transparent flex-shrink-0 relative">
             <AnimatePresence>
                 {showInputEmoji && (
-                    <motion.div 
+                    <MotionDiv 
                         ref={emojiPickerRef}
                         initial={{ opacity: 0, y: 20, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -391,13 +493,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                             width="100%"
                             height={400}
                         />
-                    </motion.div>
+                    </MotionDiv>
                 )}
             </AnimatePresence>
 
             <AnimatePresence>
                 {(editingMessage || replyingTo || imagePreview) && (
-                    <motion.div 
+                    <MotionDiv 
                         initial={{ height: 0, opacity: 0, marginBottom: 0 }} 
                         animate={{ height: 'auto', opacity: 1, marginBottom: 8 }} 
                         exit={{ height: 0, opacity: 0, marginBottom: 0 }}
@@ -409,7 +511,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                                     <img src={imagePreview} alt="Preview" className="h-full w-full object-cover" />
                                 </div>
                             )}
-                            
                             <div className="text-xs overflow-hidden">
                                 {imagePreview ? (
                                     <span className="font-bold text-brand-600 flex items-center gap-1">
@@ -428,7 +529,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                         <button onClick={() => { setEditingMessage(null); setReplyingTo(null); setInputText(''); cancelImage(); }} className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors">
                             <X size={14} className="text-gray-500" />
                         </button>
-                    </motion.div>
+                    </MotionDiv>
                 )}
             </AnimatePresence>
 
@@ -478,7 +579,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     />
                 </div>
 
-                <motion.button 
+                <MotionButton 
                     whileHover={{ scale: canSend ? 1.05 : 1 }}
                     whileTap={{ scale: canSend ? 0.95 : 1 }}
                     disabled={!canSend}
@@ -494,7 +595,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     ) : (
                         <Send size={20} className={`ml-0.5 ${canSend ? 'text-white' : 'text-gray-400'}`} />
                     )}
-                </motion.button>
+                </MotionButton>
             </div>
         </div>
     </div>

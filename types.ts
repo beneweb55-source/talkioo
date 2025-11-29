@@ -34,6 +34,7 @@ export interface Participant {
 export interface Reaction {
   emoji: string;
   user_id: string;
+  username?: string; // New: For displaying who reacted
   count?: number; // Calculé côté front
   user_reacted?: boolean; // Calculé côté front
 }

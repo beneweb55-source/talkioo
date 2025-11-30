@@ -38,6 +38,16 @@ const pool = new Pool({
 // --- DB INITIALIZATION ---
 const initDB = async () => {
     try {
+        console.log("Initializing Database...");
+
+        // 1. Enable UUID extension (CRITICAL for gen_random_uuid())
+        try {
+            await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
+        } catch (e) {
+            console.warn("Could not create extension pgcrypto (might require superuser):", e.message);
+        }
+
+        // 2. Create Users Table
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -49,7 +59,11 @@ const initDB = async () => {
                 is_online BOOLEAN DEFAULT FALSE,
                 socket_id TEXT,
                 created_at TIMESTAMPTZ DEFAULT NOW()
-            );
+            )
+        `);
+
+        // 3. Create Conversations & Participants
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS conversations (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
                 name TEXT,
@@ -66,6 +80,10 @@ const initDB = async () => {
                 last_deleted_at TIMESTAMPTZ,
                 UNIQUE(user_id, conversation_id)
             );
+        `);
+
+        // 4. Create Messages & Helpers
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS messages (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
                 conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
@@ -85,26 +103,38 @@ const initDB = async () => {
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
-            CREATE TABLE IF NOT EXISTS blocked_users (
-                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-                blocker_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                blocked_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(blocker_id, blocked_id)
-            );
+        `);
+
+        // 5. Create Blocked Users (Explicitly separate to prevent silent fails)
+        try {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS blocked_users (
+                    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                    blocker_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                    blocked_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(blocker_id, blocked_id)
+                )
+            `);
+        } catch (e) {
+            console.error("Error creating blocked_users table:", e.message);
+        }
+
+        // 6. Create Stickers & Reactions
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS stickers (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
                 url TEXT NOT NULL,
                 user_id UUID REFERENCES users(id) ON DELETE CASCADE,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
-             CREATE TABLE IF NOT EXISTS message_reads (
+            CREATE TABLE IF NOT EXISTS message_reads (
                 message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
                 user_id UUID REFERENCES users(id) ON DELETE CASCADE,
                 read_at TIMESTAMPTZ DEFAULT NOW(),
                 PRIMARY KEY (message_id, user_id)
             );
-             CREATE TABLE IF NOT EXISTS message_reactions (
+            CREATE TABLE IF NOT EXISTS message_reactions (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
                 message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
                 user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -451,8 +481,7 @@ app.post('/api/users/unblock', authenticateToken, async (req, res) => {
 
 app.get('/api/users/blocked', authenticateToken, async (req, res) => {
     try {
-        // Here we return the REAL username/avatar so the user can see WHO they blocked.
-        // The anonymization happens in conversations, not in the "Blocked Users" list.
+        // Return real profile data so the user knows WHO they blocked.
         const result = await pool.query(`
             SELECT u.id, u.username, u.tag, u.avatar_url 
             FROM blocked_users b 
@@ -461,7 +490,14 @@ app.get('/api/users/blocked', authenticateToken, async (req, res) => {
         `, [req.user.id]);
         
         res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        console.error("Error fetching blocked users:", err);
+        // If table doesn't exist yet, return empty array instead of crashing
+        if (err.code === '42P01') {
+            return res.json([]);
+        }
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.delete('/api/friends/:friendId', authenticateToken, async (req, res) => {
@@ -493,8 +529,14 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
         `;
         const result = await pool.query(query, [req.user.id]);
         
-        const blockedRes = await pool.query('SELECT blocked_id FROM blocked_users WHERE blocker_id = $1', [req.user.id]);
-        const blockedIds = new Set(blockedRes.rows.map(r => r.blocked_id));
+        // Ensure blocked_users table exists before querying
+        let blockedIds = new Set();
+        try {
+            const blockedRes = await pool.query('SELECT blocked_id FROM blocked_users WHERE blocker_id = $1', [req.user.id]);
+            blockedIds = new Set(blockedRes.rows.map(r => r.blocked_id));
+        } catch (e) {
+            // Ignore if table doesn't exist
+        }
         
         const filtered = result.rows.filter(c => !blockedIds.has(c.id));
         
@@ -578,13 +620,17 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
         const result = await pool.query(query, [req.user.id]);
         
         // Need to check for blocks to anonymize list
-        const blocksRes = await pool.query('SELECT blocked_id, blocker_id FROM blocked_users WHERE blocker_id = $1 OR blocked_id = $1', [req.user.id]);
         const blockedMap = new Set(); 
-        blocksRes.rows.forEach(r => {
-             // If I blocked them or they blocked me
-             if (r.blocker_id === req.user.id) blockedMap.add(r.blocked_id);
-             if (r.blocked_id === req.user.id) blockedMap.add(r.blocker_id);
-        });
+        try {
+            const blocksRes = await pool.query('SELECT blocked_id, blocker_id FROM blocked_users WHERE blocker_id = $1 OR blocked_id = $1', [req.user.id]);
+            blocksRes.rows.forEach(r => {
+                 // If I blocked them or they blocked me
+                 if (r.blocker_id === req.user.id) blockedMap.add(r.blocked_id);
+                 if (r.blocked_id === req.user.id) blockedMap.add(r.blocker_id);
+            });
+        } catch (e) {
+            // Ignore missing table
+        }
 
         // Filter out deleted conversations
         const visibleConversations = result.rows.filter(row => {
@@ -764,13 +810,18 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
         const otherId = pRes.rows[0].user_id;
 
         // Check Block Status
-        const blockRes = await pool.query(`
-            SELECT blocker_id FROM blocked_users 
-            WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)
-        `, [req.user.id, otherId]);
+        let isBlockedByMe = false;
+        let isBlockingMe = false;
+        
+        try {
+            const blockRes = await pool.query(`
+                SELECT blocker_id FROM blocked_users 
+                WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)
+            `, [req.user.id, otherId]);
 
-        const isBlockedByMe = blockRes.rows.some(r => r.blocker_id === req.user.id);
-        const isBlockingMe = blockRes.rows.some(r => r.blocker_id === otherId);
+            isBlockedByMe = blockRes.rows.some(r => r.blocker_id === req.user.id);
+            isBlockingMe = blockRes.rows.some(r => r.blocker_id === otherId);
+        } catch(e) { /* ignore */ }
         
         // Fetch User Data
         const uRes = await pool.query('SELECT id, username, tag, email, is_online, avatar_url FROM users WHERE id = $1', [otherId]);
@@ -857,7 +908,11 @@ app.post('/api/messages', authenticateToken, (req, res, next) => {
             const otherId = otherP.rows[0].user_id;
             
             // Check Block
-            const blocked = await pool.query('SELECT 1 FROM blocked_users WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)', [senderId, otherId]);
+            let blocked = { rows: [] };
+            try {
+                blocked = await pool.query('SELECT 1 FROM blocked_users WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)', [senderId, otherId]);
+            } catch(e) {/* ignore if table missing */}
+            
             if (blocked.rows.length > 0) return res.status(403).json({ error: "Action impossible (Blocage actif)" });
 
             // Check Friend Status
@@ -975,8 +1030,10 @@ app.post('/api/friend_requests', authenticateToken, async (req, res) => {
         if (target.id === req.user.id) return res.status(400).json({ error: "Soi-même" });
         
         // Check blocks
-        const blocked = await pool.query('SELECT 1 FROM blocked_users WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)', [req.user.id, target.id]);
-        if (blocked.rows.length > 0) return res.status(400).json({ error: "Impossible d'ajouter cet utilisateur." });
+        try {
+            const blocked = await pool.query('SELECT 1 FROM blocked_users WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)', [req.user.id, target.id]);
+            if (blocked.rows.length > 0) return res.status(400).json({ error: "Impossible d'ajouter cet utilisateur." });
+        } catch(e) {/* ignore */}
 
         const exist = await pool.query('SELECT * FROM friend_requests WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)', [req.user.id, target.id]);
         if (exist.rows.length > 0) return res.status(400).json({ error: "Déjà existant" });

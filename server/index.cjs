@@ -24,26 +24,11 @@ cloudinary.config({
 });
 
 // --- WEB PUSH CONFIGURATION ---
-// Generate keys if not in env (For development convenience)
-const vapidKeys = {
+// Initialize with env vars if present, otherwise will be loaded from DB in initDB
+let vapidKeys = {
     publicKey: process.env.VAPID_PUBLIC_KEY,
     privateKey: process.env.VAPID_PRIVATE_KEY
 };
-
-if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
-    console.log("⚠️ VAPID Keys not found in env. Generating temporary keys...");
-    const generated = webpush.generateVAPIDKeys();
-    vapidKeys.publicKey = generated.publicKey;
-    vapidKeys.privateKey = generated.privateKey;
-    console.log("👉 VAPID_PUBLIC_KEY:", vapidKeys.publicKey);
-    console.log("👉 VAPID_PRIVATE_KEY:", vapidKeys.privateKey);
-}
-
-webpush.setVapidDetails(
-    process.env.VAPID_SUBJECT || 'mailto:admin@talkio.app',
-    vapidKeys.publicKey,
-    vapidKeys.privateKey
-);
 
 // Configuration Multer
 const storage = multer.memoryStorage();
@@ -78,7 +63,15 @@ const initDB = async () => {
             console.warn("Could not create extension pgcrypto:", e.message);
         }
 
-        // 1. Core Tables
+        // 1. Create Config Table (for VAPID keys)
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        `);
+
+        // 2. Core Tables
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -121,7 +114,7 @@ const initDB = async () => {
             );
         `);
 
-        // 2. Auxiliary Tables
+        // 3. Auxiliary Tables
         await pool.query(`
             CREATE TABLE IF NOT EXISTS friend_requests (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -152,7 +145,7 @@ const initDB = async () => {
             );
         `);
 
-        // 3. Blocked Users (Robust)
+        // 4. Blocked Users (Robust)
         try {
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS blocked_users (
@@ -168,7 +161,7 @@ const initDB = async () => {
             console.error("Error creating blocked_users table:", e.message);
         }
 
-        // 4. Push Subscriptions
+        // 5. Push Subscriptions
         await pool.query(`
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -190,6 +183,44 @@ const initDB = async () => {
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
         `);
+
+        // 6. VAPID KEY PERSISTENCE (Fix for Render Restarts)
+        if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
+            console.log("Checking DB for VAPID keys...");
+            try {
+                const res = await pool.query("SELECT value FROM system_config WHERE key = 'vapid_keys'");
+                
+                if (res.rows.length > 0) {
+                    const storedKeys = JSON.parse(res.rows[0].value);
+                    vapidKeys = storedKeys;
+                    console.log("✅ Loaded VAPID keys from Database.");
+                } else {
+                    console.log("⚠️ Generating new VAPID keys and saving to DB...");
+                    const generated = webpush.generateVAPIDKeys();
+                    vapidKeys = {
+                        publicKey: generated.publicKey,
+                        privateKey: generated.privateKey
+                    };
+                    // Save to DB so they persist across restarts
+                    await pool.query("INSERT INTO system_config (key, value) VALUES ($1, $2)", ['vapid_keys', JSON.stringify(vapidKeys)]);
+                }
+            } catch (e) {
+                console.error("Could not load VAPID keys from DB:", e.message);
+                // Fallback to memory-only generation (will break on restart but better than crashing)
+                const generated = webpush.generateVAPIDKeys();
+                vapidKeys = { publicKey: generated.publicKey, privateKey: generated.privateKey };
+            }
+        } else {
+            console.log("✅ Using VAPID keys from Environment Variables.");
+        }
+
+        // Apply VAPID settings with the final keys
+        webpush.setVapidDetails(
+            process.env.VAPID_SUBJECT || 'mailto:admin@talkio.app',
+            vapidKeys.publicKey,
+            vapidKeys.privateKey
+        );
+        console.log("👉 Current Public Key:", vapidKeys.publicKey);
 
         console.log("Database initialized successfully");
     } catch (err) {
@@ -262,6 +293,10 @@ const authenticateToken = (req, res, next) => {
 // --- PUSH NOTIFICATION ROUTES ---
 
 app.get('/api/push/vapid-public-key', authenticateToken, (req, res) => {
+    // Ensure we return the active key (which might have been loaded from DB)
+    if (!vapidKeys.publicKey) {
+        return res.status(503).json({ error: "Server initializing keys..." });
+    }
     res.json({ publicKey: vapidKeys.publicKey });
 });
 
@@ -299,20 +334,22 @@ const sendPushNotification = async (userId, payload) => {
             return webpush.sendNotification(pushConfig, JSON.stringify(payload))
                 .catch(err => {
                     if (err.statusCode === 410 || err.statusCode === 404) {
+                        console.log(`Subscription expired/invalid for user ${userId}, deleting.`);
                         // Delete expired subscription
                         pool.query('DELETE FROM push_subscriptions WHERE id = $1', [sub.id]);
+                    } else {
+                        // Log actual error for debugging
+                        console.error(`🚨 Push Failed [User ${userId}]: Status ${err.statusCode}`, err.body || err.message);
                     }
                 });
         });
         await Promise.all(notifications);
     } catch (err) {
-        console.error(`Push Error for user ${userId}:`, err);
+        console.error(`Push Database Error for user ${userId}:`, err);
     }
 };
 
 // --- ROUTES ---
-
-// ... (Other routes remain the same until messages)
 
 app.post('/api/messages', authenticateToken, upload.single('media'), async (req, res) => {
     const { conversation_id, replied_to_message_id } = req.body;
@@ -390,7 +427,7 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
         
         // --- SEND PUSH NOTIFICATIONS ---
         // Find other participants who are NOT online (socket connection check is ideal but simpler to just send and let OS filter)
-        // Or send to all offline participants. Here we send to all others.
+        // Or send to all others.
         const recipients = pRes.rows.filter(r => r.user_id !== senderId);
         
         const pushTitle = `${sender.username}`;
@@ -413,8 +450,6 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
         res.json(fullMsg);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// --- RE-ADD EXISTING ROUTES THAT WERE OMITTED ABOVE TO KEEP FILE COMPLETE ---
 
 app.get('/api/gifs/search', async (req, res) => {
     const { q, pos } = req.query;

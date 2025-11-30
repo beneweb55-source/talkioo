@@ -7,6 +7,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
+const crypto = require('crypto'); // Built-in Node module
 
 // --- CONFIGURATION ---
 const app = express();
@@ -40,7 +41,7 @@ const initDB = async () => {
     try {
         console.log("Initializing Database...");
 
-        // 1. Enable UUID extension (CRITICAL for gen_random_uuid())
+        // 1. Enable UUID extension (Good to have, but we will make blocked_users resilient without it)
         try {
             await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
         } catch (e) {
@@ -105,17 +106,19 @@ const initDB = async () => {
             );
         `);
 
-        // 5. Create Blocked Users (Explicitly separate to prevent silent fails)
+        // 5. Create Blocked Users (Robust definition - no DEFAULT UUID)
         try {
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS blocked_users (
-                    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                    id UUID PRIMARY KEY,
                     blocker_id UUID REFERENCES users(id) ON DELETE CASCADE,
                     blocked_id UUID REFERENCES users(id) ON DELETE CASCADE,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     UNIQUE(blocker_id, blocked_id)
                 )
             `);
+            // Index manually just in case
+            await pool.query(`CREATE INDEX IF NOT EXISTS idx_blocked_blocker ON blocked_users(blocker_id)`);
         } catch (e) {
             console.error("Error creating blocked_users table:", e.message);
         }
@@ -466,7 +469,9 @@ app.post('/api/users/block', authenticateToken, async (req, res) => {
     const { userId } = req.body;
     if (!userId || userId === req.user.id) return res.status(400).json({ error: "Invalid User" });
     try {
-        await pool.query('INSERT INTO blocked_users (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [req.user.id, userId]);
+        // Generate UUID in Javascript to bypass missing pgcrypto extension on database
+        const id = crypto.randomUUID();
+        await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]);
         res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });

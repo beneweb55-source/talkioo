@@ -4,7 +4,7 @@ import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI
 import { User } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera, Shield, UserX, Unlock } from 'lucide-react';
+import { X, Camera, Shield, UserX, Unlock, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -31,6 +31,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const [message, setMessage] = useState<{ text: string, type: 'success' | 'error' } | null>(null);
   
   const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
+  const [isBlockedLoading, setIsBlockedLoading] = useState(false);
 
   // Sync state if user updates from elsewhere (e.g. Socket in App.tsx)
   useEffect(() => {
@@ -46,7 +47,11 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
 
   useEffect(() => {
       if (activeTab === 'blocked') {
-          getBlockedUsersAPI().then(setBlockedUsers).catch(console.error);
+          setIsBlockedLoading(true);
+          getBlockedUsersAPI()
+            .then(setBlockedUsers)
+            .catch(console.error)
+            .finally(() => setIsBlockedLoading(false));
       }
   }, [activeTab]);
 
@@ -189,8 +194,11 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
 
       {activeTab === 'blocked' && (
           <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
-              {blockedUsers.length === 0 && <p className="text-center text-gray-400 text-sm py-8">Aucun utilisateur bloqué.</p>}
-              {blockedUsers.map(u => (
+              {isBlockedLoading && (
+                  <div className="flex justify-center py-4"><Loader2 className="animate-spin text-brand-500"/></div>
+              )}
+              {!isBlockedLoading && blockedUsers.length === 0 && <p className="text-center text-gray-400 text-sm py-8">Aucun utilisateur bloqué.</p>}
+              {!isBlockedLoading && blockedUsers.map(u => (
                   <div key={u.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
                       <div className="flex items-center gap-3">
                           <div className="h-8 w-8 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center font-bold text-gray-500 overflow-hidden">

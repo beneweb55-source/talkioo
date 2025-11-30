@@ -1,4 +1,3 @@
-
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
@@ -452,18 +451,16 @@ app.post('/api/users/unblock', authenticateToken, async (req, res) => {
 
 app.get('/api/users/blocked', authenticateToken, async (req, res) => {
     try {
+        // Here we return the REAL username/avatar so the user can see WHO they blocked.
+        // The anonymization happens in conversations, not in the "Blocked Users" list.
         const result = await pool.query(`
             SELECT u.id, u.username, u.tag, u.avatar_url 
             FROM blocked_users b 
             JOIN users u ON b.blocked_id = u.id 
             WHERE b.blocker_id = $1
         `, [req.user.id]);
-        // Replace with default name if needed (optional logic, but typically blocked users are just listed)
-        const enriched = result.rows.map(u => ({
-             ...u,
-             username: u.username || "Utilisateur Evo"
-        }));
-        res.json(enriched);
+        
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -496,9 +493,6 @@ app.get('/api/contacts', authenticateToken, async (req, res) => {
         `;
         const result = await pool.query(query, [req.user.id]);
         
-        // Filter out if blocked? Usually contacts list might hide them, or just showing them is okay.
-        // Let's filter out users I have blocked from my contacts list for cleanliness, or keep them.
-        // The prompt implies strict separation. Let's filter.
         const blockedRes = await pool.query('SELECT blocked_id FROM blocked_users WHERE blocker_id = $1', [req.user.id]);
         const blockedIds = new Set(blockedRes.rows.map(r => r.blocked_id));
         

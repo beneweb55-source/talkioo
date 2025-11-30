@@ -194,7 +194,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
                   <div key={u.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
                       <div className="flex items-center gap-3">
                           <div className="h-8 w-8 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center font-bold text-gray-500 overflow-hidden">
-                              {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full object-cover"/> : u.username[0]}
+                              {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full object-cover"/> : (u.username?.charAt(0) || '?')}
                           </div>
                           <div>
                               <p className="font-semibold text-sm dark:text-gray-200">{u.username}</p>

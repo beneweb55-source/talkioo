@@ -35,6 +35,116 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
+// --- DB INITIALIZATION ---
+const initDB = async () => {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                username TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                avatar_url TEXT,
+                is_online BOOLEAN DEFAULT FALSE,
+                socket_id TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS conversations (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                name TEXT,
+                is_group BOOLEAN DEFAULT FALSE,
+                avatar_url TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS participants (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+                role TEXT DEFAULT 'member',
+                joined_at TIMESTAMPTZ DEFAULT NOW(),
+                last_deleted_at TIMESTAMPTZ,
+                UNIQUE(user_id, conversation_id)
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+                sender_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                content TEXT,
+                message_type TEXT DEFAULT 'text',
+                attachment_url TEXT,
+                replied_to_message_id UUID REFERENCES messages(id),
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ,
+                deleted_at TIMESTAMPTZ
+            );
+            CREATE TABLE IF NOT EXISTS friend_requests (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                sender_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                receiver_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                blocker_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                blocked_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(blocker_id, blocked_id)
+            );
+            CREATE TABLE IF NOT EXISTS stickers (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                url TEXT NOT NULL,
+                user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+             CREATE TABLE IF NOT EXISTS message_reads (
+                message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+                user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                read_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (message_id, user_id)
+            );
+             CREATE TABLE IF NOT EXISTS message_reactions (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+                user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                emoji TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(message_id, user_id, emoji)
+            );
+        `);
+        
+        // Add columns if they don't exist (migrations)
+        await pool.query(`
+            ALTER TABLE participants ADD COLUMN IF NOT EXISTS last_deleted_at TIMESTAMPTZ;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_type TEXT DEFAULT 'text';
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_url TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS replied_to_message_id UUID REFERENCES messages(id);
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+        `);
+
+        // Insert default stickers if table is empty
+        const stickersCheck = await pool.query('SELECT count(*) FROM stickers');
+        if (parseInt(stickersCheck.rows[0].count) === 0) {
+             await pool.query(`
+                INSERT INTO stickers (url, user_id) VALUES 
+                ('https://media.tenor.com/On7kB9wu8nQAAAAi/loading-hold-on.gif', NULL),
+                ('https://media.tenor.com/2nAv7pCjS5kAAAAi/pepe-clap.gif', NULL),
+                ('https://media.tenor.com/Si7KxV0ScIUAAAAi/cat-vibe.gif', NULL),
+                ('https://media.tenor.com/TyM5JqgM8iAAAAAi/thumbs-up-okay.gif', NULL);
+             `);
+        }
+
+        console.log("Database initialized successfully");
+    } catch (err) {
+        console.error("Error initializing database:", err);
+    }
+};
+
+// Call initDB on startup
+initDB();
+
 // --- HELPER FUNCTIONS ---
 const getAggregatedReactions = async (messageId) => {
     try {
@@ -347,7 +457,12 @@ app.get('/api/users/blocked', authenticateToken, async (req, res) => {
             JOIN users u ON b.blocked_id = u.id 
             WHERE b.blocker_id = $1
         `, [req.user.id]);
-        res.json(result.rows);
+        // Replace with default name if needed (optional logic, but typically blocked users are just listed)
+        const enriched = result.rows.map(u => ({
+             ...u,
+             username: u.username || "Utilisateur Evo"
+        }));
+        res.json(enriched);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -476,7 +591,18 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
              if (r.blocked_id === req.user.id) blockedMap.add(r.blocker_id);
         });
 
-        const enriched = await Promise.all(result.rows.map(async (row) => {
+        // Filter out deleted conversations
+        const visibleConversations = result.rows.filter(row => {
+            // If never deleted, keep it
+            if (!row.last_deleted_at) return true;
+            
+            // If deleted, only keep if there is a message AFTER the deletion date
+            if (!row.last_message_time) return false; 
+            
+            return new Date(row.last_message_time) > new Date(row.last_deleted_at);
+        });
+
+        const enriched = await Promise.all(visibleConversations.map(async (row) => {
             let displayName = row.name;
             let displayAvatar = row.avatar_url;
 
@@ -489,7 +615,7 @@ app.get('/api/conversations', authenticateToken, async (req, res) => {
                 if (otherPRes.rows.length > 0) {
                     const u = otherPRes.rows[0];
                     if (blockedMap.has(u.id)) {
-                        displayName = "Utilisateur Talkio";
+                        displayName = "Utilisateur Evo";
                         displayAvatar = null;
                     } else {
                         displayName = `${u.username}#${u.tag}`;
@@ -659,7 +785,7 @@ app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
         if (isBlockedByMe || isBlockingMe) {
             userData = {
                 ...userData,
-                username: 'Utilisateur Talkio',
+                username: 'Utilisateur Evo',
                 tag: '????',
                 avatar_url: null, 
                 is_online: false 

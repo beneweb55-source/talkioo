@@ -4,7 +4,7 @@ import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI
 import { User } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw } from 'lucide-react';
+import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -32,6 +32,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   
   const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
   const [isBlockedLoading, setIsBlockedLoading] = useState(false);
+  const [blockedError, setBlockedError] = useState('');
 
   // Sync state if user updates from elsewhere (e.g. Socket in App.tsx)
   useEffect(() => {
@@ -47,9 +48,13 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
 
   const fetchBlockedUsers = () => {
       setIsBlockedLoading(true);
+      setBlockedError('');
       getBlockedUsersAPI()
         .then(setBlockedUsers)
-        .catch(console.error)
+        .catch(err => {
+            console.error(err);
+            setBlockedError("Impossible de charger la liste.");
+        })
         .finally(() => setIsBlockedLoading(false));
   };
 
@@ -208,6 +213,12 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
               
               {isBlockedLoading ? (
                   <div className="flex justify-center py-8"><Loader2 className="animate-spin text-brand-500" /></div>
+              ) : blockedError ? (
+                  <div className="flex flex-col items-center justify-center py-6 text-red-500 gap-2">
+                      <AlertTriangle size={24} />
+                      <p className="text-sm">{blockedError}</p>
+                      <button onClick={fetchBlockedUsers} className="text-xs underline">Réessayer</button>
+                  </div>
               ) : blockedUsers.length === 0 ? (
                   <p className="text-center text-gray-400 text-sm py-8">Aucun utilisateur bloqué.</p>
               ) : (

@@ -36,6 +36,14 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
+// --- HELPER: UUID Generator (Polyfill) ---
+function generateUUID() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
+        (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+    );
+}
+
 // --- DB INITIALIZATION ---
 const initDB = async () => {
     try {
@@ -470,10 +478,24 @@ app.post('/api/users/block', authenticateToken, async (req, res) => {
     if (!userId || userId === req.user.id) return res.status(400).json({ error: "Invalid User" });
     try {
         // Generate UUID in Javascript to bypass missing pgcrypto extension on database
-        const id = crypto.randomUUID();
+        const id = generateUUID();
         await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]);
         res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        console.error("Block Error:", err);
+        // Attempt to create table if it doesn't exist
+        if (err.code === '42P01') {
+            try {
+                await pool.query(`CREATE TABLE IF NOT EXISTS blocked_users (id UUID PRIMARY KEY, blocker_id UUID REFERENCES users(id) ON DELETE CASCADE, blocked_id UUID REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(blocker_id, blocked_id))`);
+                const id = generateUUID();
+                await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]);
+                return res.json({ success: true });
+            } catch(e) {
+                return res.status(500).json({ error: "DB Error: " + e.message });
+            }
+        }
+        res.status(500).json({ error: err.message }); 
+    }
 });
 
 app.post('/api/users/unblock', authenticateToken, async (req, res) => {

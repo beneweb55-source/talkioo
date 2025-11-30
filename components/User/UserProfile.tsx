@@ -1,11 +1,11 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI } from '../../services/api';
 import { User } from '../../types';
-import { usePushNotifications } from '../../hooks/usePushNotifications';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw, AlertTriangle, Bell } from 'lucide-react';
+import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw, AlertTriangle, Bell, Info, Palette, Check, Droplet } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -14,14 +14,24 @@ interface UserProfileProps {
   onClose: () => void;
 }
 
+const PRESET_THEMES = [
+    { name: 'orange', label: 'Orange', bg: 'bg-orange-500' },
+    { name: 'blue', label: 'Bleu', bg: 'bg-blue-500' },
+    { name: 'purple', label: 'Violet', bg: 'bg-purple-500' },
+    { name: 'pink', label: 'Rose', bg: 'bg-pink-500' },
+    { name: 'green', label: 'Vert', bg: 'bg-green-500' },
+    { name: 'red', label: 'Rouge', bg: 'bg-red-500' },
+];
+
 export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
-  const { user, login } = useAuth();
-  const { isSubscribed, togglePush, isLoading: isPushLoading } = usePushNotifications(user?.id);
+  const { user, login, applyTheme } = useAuth();
   
   const [activeTab, setActiveTab] = useState<'profile' | 'settings' | 'blocked'>('profile');
   
   const [username, setUsername] = useState(user?.username || '');
   const [email, setEmail] = useState(user?.email || '');
+  const [selectedTheme, setSelectedTheme] = useState(user?.theme_color || 'orange');
+  const [customHex, setCustomHex] = useState('#000000'); // Temp state for custom picker
   
   const [selectedAvatar, setSelectedAvatar] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(user?.avatar_url || null);
@@ -37,15 +47,30 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const [isBlockedLoading, setIsBlockedLoading] = useState(false);
   const [blockedError, setBlockedError] = useState('');
 
+  // Initial setup for custom color picker
   useEffect(() => {
-    if (user) {
-        setUsername(user.username);
-        setEmail(user.email);
-        if (!selectedAvatar) {
-            setAvatarPreview(user.avatar_url || null);
-        }
-    }
+      if (user) {
+          setUsername(user.username);
+          setEmail(user.email);
+          setSelectedTheme(user.theme_color || 'orange');
+          
+          // If the saved theme is a HEX code, initialize the picker
+          if (user.theme_color && user.theme_color.startsWith('#')) {
+              setCustomHex(user.theme_color);
+          }
+          
+          if (!selectedAvatar) {
+              setAvatarPreview(user.avatar_url || null);
+          }
+      }
   }, [user, selectedAvatar]);
+
+  // Restore theme on close if not saved
+  useEffect(() => {
+      return () => {
+          if (user?.theme_color) applyTheme(user.theme_color);
+      };
+  }, []);
 
   const fetchBlockedUsers = () => {
       setIsBlockedLoading(true);
@@ -74,6 +99,18 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       }
   };
 
+  const handleThemeChange = (color: string) => {
+      setSelectedTheme(color);
+      applyTheme(color); // Real-time preview
+  };
+
+  const handleCustomColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const color = e.target.value;
+      setCustomHex(color);
+      setSelectedTheme(color);
+      applyTheme(color); // Real-time preview
+  };
+
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -82,7 +119,8 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       const updatedUser = await updateProfileAPI({ 
           username, 
           email,
-          avatar: selectedAvatar 
+          avatar: selectedAvatar,
+          theme_color: selectedTheme
       });
       
       if (updatedUser) {
@@ -94,6 +132,8 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       setSelectedAvatar(null);
     } catch (err: any) {
       setMessage({ text: err.message || "Erreur lors de la mise à jour", type: 'error' });
+      // Revert theme preview on error
+      if (user?.theme_color) applyTheme(user.theme_color);
     } finally {
       setIsLoading(false);
     }
@@ -124,7 +164,11 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
 
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-800 relative">
-      <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+      <button onClick={() => { 
+          // Reset theme if cancelling without save
+          if (user?.theme_color) applyTheme(user.theme_color);
+          onClose(); 
+      }} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
         <X size={20} />
       </button>
       
@@ -185,44 +229,57 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       </AnimatePresence>
 
       {activeTab === 'profile' && (
-        <form onSubmit={handleUpdateProfile} className="space-y-4">
+        <form onSubmit={handleUpdateProfile} className="space-y-6">
             <Input label="Nom d'utilisateur" value={username} onChange={e => setUsername(e.target.value)} required />
             <Input label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
+            
+            {/* THEME SELECTION */}
+            <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2 ml-1">
+                    Thème de couleur
+                </label>
+                <div className="flex flex-wrap gap-3 items-center">
+                    {PRESET_THEMES.map(color => (
+                        <button
+                            key={color.name}
+                            type="button"
+                            onClick={() => handleThemeChange(color.name)}
+                            className={`w-9 h-9 rounded-full ${color.bg} shadow-sm flex items-center justify-center transition-transform hover:scale-110 relative border-2 ${selectedTheme === color.name ? 'border-white dark:border-gray-900 ring-2 ring-gray-400 dark:ring-gray-500' : 'border-transparent'}`}
+                            title={color.label}
+                        >
+                            {selectedTheme === color.name && (
+                                <Check size={16} className="text-white drop-shadow-md" strokeWidth={3} />
+                            )}
+                        </button>
+                    ))}
+                    
+                    {/* CUSTOM COLOR PICKER */}
+                    <div className="relative group">
+                        <div className={`w-9 h-9 rounded-full bg-gradient-to-tr from-gray-100 to-gray-300 dark:from-gray-700 dark:to-gray-600 flex items-center justify-center cursor-pointer transition-transform hover:scale-110 border-2 ${selectedTheme.startsWith('#') ? 'border-white dark:border-gray-900 ring-2 ring-gray-400 dark:ring-gray-500' : 'border-transparent'}`}>
+                            <Droplet size={16} className={selectedTheme.startsWith('#') ? 'text-brand-500' : 'text-gray-500 dark:text-gray-300'} />
+                        </div>
+                        <input 
+                            type="color" 
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            value={customHex}
+                            onChange={handleCustomColorChange}
+                            title="Couleur personnalisée"
+                        />
+                    </div>
+                </div>
+                {selectedTheme.startsWith('#') && (
+                    <p className="text-xs text-brand-500 mt-2 font-medium">
+                        Couleur personnalisée active : {selectedTheme}
+                    </p>
+                )}
+            </div>
+
             <Button type="submit" isLoading={isLoading}>Enregistrer</Button>
         </form>
       )}
 
       {activeTab === 'settings' && (
         <div className="space-y-6">
-            {/* Preferences Section */}
-            <div>
-                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3 px-1">Préférences</h3>
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-brand-100 dark:bg-brand-900/30 text-brand-600 rounded-lg">
-                            <Bell size={20} />
-                        </div>
-                        <div>
-                            <p className="text-sm font-medium dark:text-white">Notifications Push</p>
-                            <p className="text-xs text-gray-500">Recevoir des alertes sur cet appareil</p>
-                        </div>
-                    </div>
-                    <button 
-                        onClick={togglePush}
-                        disabled={isPushLoading}
-                        className={`relative w-11 h-6 rounded-full transition-colors ${isSubscribed ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-600'} ${isPushLoading ? 'opacity-70 cursor-not-allowed' : ''}`}
-                    >
-                        {isPushLoading ? (
-                             <div className="absolute inset-0 flex items-center justify-center">
-                                 <Loader2 size={12} className="animate-spin text-white" />
-                             </div>
-                        ) : (
-                            <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${isSubscribed ? 'translate-x-5' : ''}`} />
-                        )}
-                    </button>
-                </div>
-            </div>
-
             {/* Security Section */}
             <div>
                 <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3 px-1">Sécurité</h3>

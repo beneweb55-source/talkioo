@@ -8,6 +8,7 @@ export interface User {
   avatar_url?: string | null; // URL de la photo de profil
   is_blocked_by_me?: boolean;
   is_blocking_me?: boolean;
+  theme_color?: string; // 'orange', 'blue', 'purple', etc.
 }
 
 export interface GroupMember {

@@ -15,16 +15,16 @@
             },
             colors: {
               brand: {
-                50: '#fff7ed',
-                100: '#ffedd5',
-                200: '#fed7aa',
-                300: '#fdba74',
-                400: '#fb923c',
-                500: '#f97316', // Orange principal
-                600: '#ea580c',
-                700: '#c2410c',
-                800: '#9a3412',
-                900: '#7c2d12',
+                50: 'rgb(var(--brand-50) / <alpha-value>)',
+                100: 'rgb(var(--brand-100) / <alpha-value>)',
+                200: 'rgb(var(--brand-200) / <alpha-value>)',
+                300: 'rgb(var(--brand-300) / <alpha-value>)',
+                400: 'rgb(var(--brand-400) / <alpha-value>)',
+                500: 'rgb(var(--brand-500) / <alpha-value>)',
+                600: 'rgb(var(--brand-600) / <alpha-value>)',
+                700: 'rgb(var(--brand-700) / <alpha-value>)',
+                800: 'rgb(var(--brand-800) / <alpha-value>)',
+                900: 'rgb(var(--brand-900) / <alpha-value>)',
               }
             }
           }
@@ -33,6 +33,20 @@
     </script>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
+      :root {
+        /* Default Orange Theme */
+        --brand-50: 255 247 237;
+        --brand-100: 255 237 213;
+        --brand-200: 254 215 170;
+        --brand-300: 253 186 116;
+        --brand-400: 251 146 60;
+        --brand-500: 249 115 22;
+        --brand-600: 234 88 12;
+        --brand-700: 194 65 12;
+        --brand-800: 154 52 18;
+        --brand-900: 124 45 18;
+      }
+
       body { 
         font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; 
         -webkit-font-smoothing: antialiased;
@@ -57,7 +71,7 @@
 
       /* Selection Color */
       ::selection {
-        background: #fb923c;
+        background: rgb(var(--brand-400));
         color: white;
       }
 

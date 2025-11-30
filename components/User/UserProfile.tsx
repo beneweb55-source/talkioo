@@ -16,7 +16,7 @@ interface UserProfileProps {
 
 export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const { user, login } = useAuth();
-  const { isSubscribed, togglePush } = usePushNotifications(user?.id);
+  const { isSubscribed, togglePush, isLoading: isPushLoading } = usePushNotifications(user?.id);
   
   const [activeTab, setActiveTab] = useState<'profile' | 'settings' | 'blocked'>('profile');
   
@@ -209,9 +209,16 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
                     </div>
                     <button 
                         onClick={togglePush}
-                        className={`relative w-11 h-6 rounded-full transition-colors ${isSubscribed ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                        disabled={isPushLoading}
+                        className={`relative w-11 h-6 rounded-full transition-colors ${isSubscribed ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-600'} ${isPushLoading ? 'opacity-70 cursor-not-allowed' : ''}`}
                     >
-                        <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${isSubscribed ? 'translate-x-5' : ''}`} />
+                        {isPushLoading ? (
+                             <div className="absolute inset-0 flex items-center justify-center">
+                                 <Loader2 size={12} className="animate-spin text-white" />
+                             </div>
+                        ) : (
+                            <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${isSubscribed ? 'translate-x-5' : ''}`} />
+                        )}
                     </button>
                 </div>
             </div>

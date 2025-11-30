@@ -19,6 +19,7 @@ const urlBase64ToUint8Array = (base64String: string) => {
 export const usePushNotifications = (userId: string | undefined) => {
     const [permission, setPermission] = useState<NotificationPermission>('default');
     const [isSubscribed, setIsSubscribed] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
         if ('Notification' in window) {
@@ -29,11 +30,15 @@ export const usePushNotifications = (userId: string | undefined) => {
 
     const checkSubscriptionStatus = async () => {
         if ('serviceWorker' in navigator) {
-            const registration = await navigator.serviceWorker.getRegistration();
-            if (registration) {
-                const subscription = await registration.pushManager.getSubscription();
-                setIsSubscribed(!!subscription);
-                return !!subscription;
+            try {
+                const registration = await navigator.serviceWorker.getRegistration();
+                if (registration) {
+                    const subscription = await registration.pushManager.getSubscription();
+                    setIsSubscribed(!!subscription);
+                    return !!subscription;
+                }
+            } catch (e) {
+                console.warn("Service Worker status check failed:", e);
             }
         }
         setIsSubscribed(false);
@@ -48,9 +53,21 @@ export const usePushNotifications = (userId: string | undefined) => {
             return;
         }
 
+        setIsLoading(true);
+
         try {
-            const scriptUrl = '/serviceWorker.js';
-            const registration = await navigator.serviceWorker.register(scriptUrl, { scope: '/' });
+            // FIX: Use relative path './serviceWorker.js' to match current origin path
+            // FIX: Remove scope constraint which can cause SecurityErrors on some hosts
+            const scriptUrl = './serviceWorker.js'; 
+            
+            let registration;
+            try {
+                registration = await navigator.serviceWorker.register(scriptUrl);
+            } catch (e) {
+                console.warn("SW register failed with relative path, retrying with root path...", e);
+                registration = await navigator.serviceWorker.register('/serviceWorker.js');
+            }
+            
             await navigator.serviceWorker.ready;
 
             const { publicKey } = await getVapidPublicKeyAPI();
@@ -72,31 +89,38 @@ export const usePushNotifications = (userId: string | undefined) => {
                 setPermission('denied');
             }
             console.error("Failed to subscribe:", error);
+        } finally {
+            setIsLoading(false);
         }
     }, [userId]);
 
     const unsubscribeFromPush = useCallback(async () => {
-        if ('serviceWorker' in navigator) {
-            const registration = await navigator.serviceWorker.getRegistration();
-            if (registration) {
-                const subscription = await registration.pushManager.getSubscription();
-                if (subscription) {
-                    await subscription.unsubscribe();
-                    setIsSubscribed(false);
-                    console.log("Push notifications unsubscribed.");
+        setIsLoading(true);
+        try {
+            if ('serviceWorker' in navigator) {
+                const registration = await navigator.serviceWorker.getRegistration();
+                if (registration) {
+                    const subscription = await registration.pushManager.getSubscription();
+                    if (subscription) {
+                        await subscription.unsubscribe();
+                        setIsSubscribed(false);
+                        console.log("Push notifications unsubscribed.");
+                    }
                 }
             }
+        } catch (e) {
+            console.error("Unsubscribe error", e);
+        } finally {
+            setIsLoading(false);
         }
     }, []);
 
     // Logic to refresh subscription on load ONLY IF it already exists
-    // This allows "permission: granted" but "subscription: null" (User disabled it in app)
     useEffect(() => {
         const sync = async () => {
             if (userId && permission === 'granted') {
                 const hasSub = await checkSubscriptionStatus();
                 if (hasSub) {
-                    // Only re-run subscription logic (to update backend) if browser actually has a subscription
                     subscribeToPush();
                 }
             }
@@ -106,6 +130,7 @@ export const usePushNotifications = (userId: string | undefined) => {
 
     const requestPermission = async () => {
         if (!('Notification' in window)) return;
+        setIsLoading(true);
         try {
             const result = await Notification.requestPermission();
             setPermission(result);
@@ -114,6 +139,8 @@ export const usePushNotifications = (userId: string | undefined) => {
             }
         } catch (error) {
             console.error("Error requesting permission:", error);
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -129,5 +156,5 @@ export const usePushNotifications = (userId: string | undefined) => {
         }
     };
 
-    return { permission, requestPermission, isSubscribed, togglePush };
+    return { permission, requestPermission, isSubscribed, togglePush, isLoading };
 };

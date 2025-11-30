@@ -1,4 +1,3 @@
-
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
@@ -37,11 +36,13 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// --- HELPER: UUID Generator (Polyfill) ---
+// --- HELPER: UUID Generator (Node.js Safe Polyfill) ---
 function generateUUID() {
+    // If available (Node 14.17+)
     if (crypto.randomUUID) return crypto.randomUUID();
-    return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
-        (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+    // Fallback manual v4 UUID generation
+    return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+        (c ^ crypto.randomBytes(1)[0] & 15 >> c / 4).toString(16)
     );
 }
 
@@ -484,7 +485,7 @@ app.post('/api/users/block', authenticateToken, async (req, res) => {
         res.json({ success: true });
     } catch (err) { 
         console.error("Block Error:", err);
-        // Attempt to create table if it doesn't exist
+        // Attempt to create table if it doesn't exist (Lazy Init)
         if (err.code === '42P01') {
             try {
                 await pool.query(`CREATE TABLE IF NOT EXISTS blocked_users (id UUID PRIMARY KEY, blocker_id UUID REFERENCES users(id) ON DELETE CASCADE, blocked_id UUID REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(blocker_id, blocked_id))`);
@@ -492,7 +493,7 @@ app.post('/api/users/block', authenticateToken, async (req, res) => {
                 await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]);
                 return res.json({ success: true });
             } catch(e) {
-                return res.status(500).json({ error: "DB Error: " + e.message });
+                return res.status(500).json({ error: "DB Error (Create Table): " + e.message });
             }
         }
         res.status(500).json({ error: err.message }); 
@@ -523,7 +524,13 @@ app.get('/api/users/blocked', authenticateToken, async (req, res) => {
         console.error("Error fetching blocked users:", err);
         // If table doesn't exist yet, return empty array instead of crashing
         if (err.code === '42P01') {
-            return res.json([]);
+             try {
+                // Auto-create table if missing to prevent future errors
+                await pool.query(`CREATE TABLE IF NOT EXISTS blocked_users (id UUID PRIMARY KEY, blocker_id UUID REFERENCES users(id) ON DELETE CASCADE, blocked_id UUID REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(blocker_id, blocked_id))`);
+                return res.json([]);
+             } catch (e) {
+                 return res.status(500).json({ error: "DB Table Error: " + e.message });
+             }
         }
         res.status(500).json({ error: err.message }); 
     }

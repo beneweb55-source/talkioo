@@ -4,7 +4,7 @@ import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI
 import { User } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera, Shield, UserX, Unlock, Loader2 } from 'lucide-react';
+import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -45,13 +45,17 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
     }
   }, [user, selectedAvatar]);
 
+  const fetchBlockedUsers = () => {
+      setIsBlockedLoading(true);
+      getBlockedUsersAPI()
+        .then(setBlockedUsers)
+        .catch(console.error)
+        .finally(() => setIsBlockedLoading(false));
+  };
+
   useEffect(() => {
       if (activeTab === 'blocked') {
-          setIsBlockedLoading(true);
-          getBlockedUsersAPI()
-            .then(setBlockedUsers)
-            .catch(console.error)
-            .finally(() => setIsBlockedLoading(false));
+          fetchBlockedUsers();
       }
   }, [activeTab]);
 
@@ -193,27 +197,40 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       )}
 
       {activeTab === 'blocked' && (
-          <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
-              {isBlockedLoading && (
-                  <div className="flex justify-center py-4"><Loader2 className="animate-spin text-brand-500"/></div>
-              )}
-              {!isBlockedLoading && blockedUsers.length === 0 && <p className="text-center text-gray-400 text-sm py-8">Aucun utilisateur bloqué.</p>}
-              {!isBlockedLoading && blockedUsers.map(u => (
-                  <div key={u.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                      <div className="flex items-center gap-3">
-                          <div className="h-8 w-8 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center font-bold text-gray-500 overflow-hidden">
-                              {u.avatar_url ? <img src={u.avatar_url} className="w-full h-full object-cover"/> : (u.username?.charAt(0) || '?')}
+          <div className="space-y-2">
+              <div className="flex justify-between items-center mb-2 px-1">
+                  <span className="text-xs font-semibold text-gray-500 uppercase">Utilisateurs bloqués</span>
+                  <button onClick={fetchBlockedUsers} className="text-xs text-brand-600 hover:text-brand-700 flex items-center gap-1">
+                      <RefreshCw size={12} className={isBlockedLoading ? 'animate-spin' : ''}/> Rafraîchir
+                  </button>
+              </div>
+              
+              {isBlockedLoading ? (
+                  <div className="flex justify-center py-8"><Loader2 className="animate-spin text-brand-500" /></div>
+              ) : blockedUsers.length === 0 ? (
+                  <p className="text-center text-gray-400 text-sm py-8">Aucun utilisateur bloqué.</p>
+              ) : (
+                  blockedUsers.map(blockedUser => (
+                      <div key={blockedUser.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                          <div className="flex items-center gap-3">
+                              <div className="h-8 w-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center font-bold text-gray-600 dark:text-gray-300 overflow-hidden">
+                                  {blockedUser.avatar_url ? (
+                                      <img src={blockedUser.avatar_url} className="w-full h-full object-cover" alt={blockedUser.username || "User"} />
+                                  ) : (
+                                      (blockedUser.username || "U").charAt(0).toUpperCase()
+                                  )}
+                              </div>
+                              <div className="flex flex-col">
+                                  <span className="text-sm font-medium dark:text-gray-200">{blockedUser.username || "Utilisateur Inconnu"}</span>
+                                  <span className="text-xs text-gray-400">#{blockedUser.tag || "????"}</span>
+                              </div>
                           </div>
-                          <div>
-                              <p className="font-semibold text-sm dark:text-gray-200">{u.username}</p>
-                              <p className="text-xs text-gray-400">#{u.tag}</p>
-                          </div>
+                          <button onClick={() => handleUnblock(blockedUser.id)} className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-colors" title="Débloquer">
+                              <Unlock size={18} />
+                          </button>
                       </div>
-                      <button onClick={() => handleUnblock(u.id)} className="text-xs font-medium text-brand-600 bg-brand-50 hover:bg-brand-100 px-2 py-1 rounded-lg">
-                          Débloquer
-                      </button>
-                  </div>
-              ))}
+                  ))
+              )}
           </div>
       )}
     </div>

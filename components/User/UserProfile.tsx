@@ -53,7 +53,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
         .then(setBlockedUsers)
         .catch(err => {
             console.error(err);
-            setBlockedError("Impossible de charger la liste.");
+            setBlockedError(err.message || "Impossible de charger la liste.");
         })
         .finally(() => setIsBlockedLoading(false));
   };
@@ -216,7 +216,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
               ) : blockedError ? (
                   <div className="flex flex-col items-center justify-center py-6 text-red-500 gap-2">
                       <AlertTriangle size={24} />
-                      <p className="text-sm">{blockedError}</p>
+                      <p className="text-sm text-center">{blockedError}</p>
                       <button onClick={fetchBlockedUsers} className="text-xs underline">Réessayer</button>
                   </div>
               ) : blockedUsers.length === 0 ? (

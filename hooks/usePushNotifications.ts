@@ -27,37 +27,30 @@ export const usePushNotifications = (userId: string | undefined) => {
             
             // Basic support check
             if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-                return;
-            }
-
-            // Secure Context check (Service Workers require HTTPS or localhost)
-            if (!window.isSecureContext) {
-                // Silently return in insecure contexts
+                console.log("Push notifications not supported on this browser.");
                 return;
             }
 
             try {
                 // Use a simple relative path string.
-                // The browser resolves this relative to the document's location.
-                const scriptUrl = './serviceWorker.js';
+                const scriptUrl = '/serviceWorker.js';
                 
-                // We use 'scope: ./' to ensure it controls the current path downwards.
-                const registration = await navigator.serviceWorker.register(scriptUrl, { scope: './' });
-                
-                // Wait for it to be ready
+                const registration = await navigator.serviceWorker.register(scriptUrl, { scope: '/' });
                 await navigator.serviceWorker.ready;
 
                 if (!isMounted) return;
 
-                // Request Permission
+                // Request Permission (User interaction might be needed in some browsers, but often works if initiated early)
                 const permission = await Notification.requestPermission();
                 if (permission !== 'granted') {
-                    // Silently return if permission denied
+                    console.log("Push notification permission denied.");
                     return;
                 }
 
-                // Get VAPID Key
+                // Get VAPID Key from Backend
                 const { publicKey } = await getVapidPublicKeyAPI();
+                if (!publicKey) throw new Error("No public key returned");
+                
                 const convertedVapidKey = urlBase64ToUint8Array(publicKey);
 
                 // Subscribe
@@ -66,27 +59,21 @@ export const usePushNotifications = (userId: string | undefined) => {
                     applicationServerKey: convertedVapidKey
                 });
 
-                // Send to Backend
+                // Send Subscription to Backend
                 await subscribeToPushAPI(subscription);
                 console.log("Push notifications subscribed successfully.");
 
             } catch (error: any) {
-                // Silently ignore known environment restrictions to prevent console noise
-                if (error.name === 'SecurityError' || error.name === 'InvalidStateError') {
+                // Silent fail for common permission/security issues to avoid console spam
+                if (error.name === 'SecurityError' || error.name === 'InvalidStateError' || error.name === 'NotAllowedError') {
                     return;
                 } 
-                if (error.message && error.message.includes('Invalid URL')) {
-                     return;
-                }
-
-                // Only log real unexpected errors
                 console.error("Failed to subscribe to push notifications:", error);
             }
         };
 
-        // Delay execution slightly to ensure document is fully active and resources loaded
         const init = () => {
-            setTimeout(subscribeToPush, 1000);
+            setTimeout(subscribeToPush, 2000); // Wait a bit for app to settle
         };
 
         if (document.readyState === 'complete') {

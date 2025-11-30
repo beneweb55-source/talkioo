@@ -1,12 +1,18 @@
 self.addEventListener('push', function(event) {
     if (event.data) {
-        const data = event.data.json();
+        let data = {};
+        try {
+            data = event.data.json();
+        } catch(e) {
+            data = { title: 'Nouveau message', body: event.data.text() };
+        }
         
         const options = {
             body: data.body,
             icon: data.icon || '/logo192.png',
             badge: '/logo192.png',
-            data: data.data // Contains conversationId
+            vibrate: [100, 50, 100],
+            data: data.data || {} // Contains conversationId
         };
 
         event.waitUntil(
@@ -17,20 +23,20 @@ self.addEventListener('push', function(event) {
 
 self.addEventListener('notificationclick', function(event) {
     event.notification.close();
-
-    // Focus on window if open, else open new
+    
+    // Focus existing window or open new
     event.waitUntil(
         clients.matchAll({type: 'window', includeUncontrolled: true}).then(function(clientList) {
-            if (clientList.length > 0) {
-                let client = clientList[0];
-                for (let i = 0; i < clientList.length; i++) {
-                    if (clientList[i].focused) {
-                        client = clientList[i];
-                    }
+            // Try to find an open tab
+            for (let i = 0; i < clientList.length; i++) {
+                const client = clientList[i];
+                if (client.url && 'focus' in client) {
+                    return client.focus();
                 }
-                return client.focus();
             }
-            return clients.openWindow('/');
+            if (clients.openWindow) {
+                return clients.openWindow('/');
+            }
         })
     );
 });

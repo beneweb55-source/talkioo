@@ -271,45 +271,66 @@ const Dashboard = () => {
         ${activeConversationId ? 'hidden md:flex' : 'flex'}
       `}>
         
-        {/* Header (Search & User) */}
+        {/* Header (Search & User & Tabs) */}
         <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md sticky top-0 z-20">
-            <div className="flex justify-between items-center mb-4">
-                <div className="flex items-center gap-3 group cursor-pointer" onClick={() => setMobileView('profile')}>
-                    <div className="h-9 w-9 bg-gradient-to-tr from-brand-500 to-brand-600 rounded-xl flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
-                        {user?.avatar_url ? (
-                            <img src={user.avatar_url} alt={user.username} className="w-full h-full object-cover" />
-                        ) : (
-                            user?.username.charAt(0).toUpperCase()
-                        )}
-                    </div>
-                    <div>
-                        <h1 className="text-lg font-bold text-gray-900 dark:text-white leading-tight">Discussions</h1>
-                        <div className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400">
-                            <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div> En ligne
+            <div className="flex flex-col gap-3 mb-2">
+                <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-3 group cursor-pointer" onClick={() => setMobileView('profile')}>
+                        <div className="h-9 w-9 bg-gradient-to-tr from-brand-500 to-brand-600 rounded-xl flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
+                            {user?.avatar_url ? (
+                                <img src={user.avatar_url} alt={user.username} className="w-full h-full object-cover" />
+                            ) : (
+                                user?.username.charAt(0).toUpperCase()
+                            )}
+                        </div>
+                        <div>
+                            <h1 className="text-lg font-bold text-gray-900 dark:text-white leading-tight">{user?.username}</h1>
+                             <div className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400">
+                                <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div> En ligne
+                            </div>
                         </div>
                     </div>
+                    <div className="flex gap-2">
+                        <button onClick={toggleTheme} className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                            {isDarkMode ? <Sun size={18}/> : <Moon size={18}/>}
+                        </button>
+                        <button onClick={() => setIsGroupModalOpen(true)} className="p-2 rounded-lg bg-brand-50 dark:bg-brand-900/30 text-brand-600 hover:bg-brand-100 transition-colors">
+                            <Users size={18} />
+                        </button>
+                    </div>
                 </div>
-                <div className="flex gap-2">
-                    <button onClick={toggleTheme} className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
-                        {isDarkMode ? <Sun size={18}/> : <Moon size={18}/>}
+
+                {/* Navigation Tabs (Mobile & Desktop) */}
+                <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-xl">
+                    <button 
+                        onClick={() => setMobileView('chats')} 
+                        className={`flex-1 py-1.5 text-sm font-medium rounded-lg transition-all ${mobileView === 'chats' ? 'bg-white dark:bg-gray-700 shadow-sm text-brand-600 dark:text-brand-400' : 'text-gray-500 dark:text-gray-400'}`}
+                    >
+                        Discussions
                     </button>
-                    <button onClick={() => setIsGroupModalOpen(true)} className="p-2 rounded-lg bg-brand-50 dark:bg-brand-900/30 text-brand-600 hover:bg-brand-100 transition-colors">
-                        <Users size={18} />
+                    <button 
+                        onClick={() => setMobileView('contacts')} 
+                        className={`flex-1 py-1.5 text-sm font-medium rounded-lg transition-all relative ${mobileView === 'contacts' ? 'bg-white dark:bg-gray-700 shadow-sm text-brand-600 dark:text-brand-400' : 'text-gray-500 dark:text-gray-400'}`}
+                    >
+                        Contacts
+                        {friendRequests.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>}
                     </button>
                 </div>
             </div>
 
-            {/* Global Search Bar */}
-            <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                <input 
-                    type="text" 
-                    placeholder="Rechercher..." 
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-gray-800 border-none rounded-xl text-sm focus:ring-2 focus:ring-brand-500/20 focus:bg-white dark:focus:bg-gray-800/80 transition-all outline-none dark:text-white placeholder-gray-500"
-                />
-            </div>
+            {/* Global Search Bar (Only shown in chats or contacts) */}
+            {mobileView !== 'profile' && (
+                <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                    <input 
+                        type="text" 
+                        placeholder={mobileView === 'contacts' ? "Rechercher un contact..." : "Rechercher une discussion..."}
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 bg-gray-100 dark:bg-gray-800 border-none rounded-xl text-sm focus:ring-2 focus:ring-brand-500/20 focus:bg-white dark:focus:bg-gray-800/80 transition-all outline-none dark:text-white placeholder-gray-500"
+                    />
+                </div>
+            )}
         </div>
 
         {/* Content Area */}
@@ -342,7 +363,7 @@ const Dashboard = () => {
             </div>
         )}
 
-        {/* Bottom Navigation (Mobile Only) */}
+        {/* Bottom Navigation (Mobile Only - Simplified to match Sidebar tabs) */}
         <div className="md:hidden h-16 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex items-center justify-around px-2 z-30 pb-safe fixed bottom-0 left-0 w-full backdrop-blur-lg bg-white/90 dark:bg-gray-900/90">
             <button 
                 onClick={() => setMobileView('chats')} 

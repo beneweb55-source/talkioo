@@ -1,11 +1,10 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI } from '../../services/api';
 import { User } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw, AlertTriangle, Bell, Info, Palette, Check, Droplet } from 'lucide-react';
+import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -14,24 +13,12 @@ interface UserProfileProps {
   onClose: () => void;
 }
 
-const PRESET_THEMES = [
-    { name: 'orange', label: 'Orange', bg: 'bg-orange-500' },
-    { name: 'blue', label: 'Bleu', bg: 'bg-blue-500' },
-    { name: 'purple', label: 'Violet', bg: 'bg-purple-500' },
-    { name: 'pink', label: 'Rose', bg: 'bg-pink-500' },
-    { name: 'green', label: 'Vert', bg: 'bg-green-500' },
-    { name: 'red', label: 'Rouge', bg: 'bg-red-500' },
-];
-
 export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
-  const { user, login, applyTheme } = useAuth();
-  
-  const [activeTab, setActiveTab] = useState<'profile' | 'settings' | 'blocked'>('profile');
+  const { user, login } = useAuth();
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'blocked'>('profile');
   
   const [username, setUsername] = useState(user?.username || '');
   const [email, setEmail] = useState(user?.email || '');
-  const [selectedTheme, setSelectedTheme] = useState(user?.theme_color || 'orange');
-  const [customHex, setCustomHex] = useState('#000000'); // Temp state for custom picker
   
   const [selectedAvatar, setSelectedAvatar] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(user?.avatar_url || null);
@@ -47,30 +34,17 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const [isBlockedLoading, setIsBlockedLoading] = useState(false);
   const [blockedError, setBlockedError] = useState('');
 
-  // Initial setup for custom color picker
+  // Sync state if user updates from elsewhere (e.g. Socket in App.tsx)
   useEffect(() => {
-      if (user) {
-          setUsername(user.username);
-          setEmail(user.email);
-          setSelectedTheme(user.theme_color || 'orange');
-          
-          // If the saved theme is a HEX code, initialize the picker
-          if (user.theme_color && user.theme_color.startsWith('#')) {
-              setCustomHex(user.theme_color);
-          }
-          
-          if (!selectedAvatar) {
-              setAvatarPreview(user.avatar_url || null);
-          }
-      }
+    if (user) {
+        setUsername(user.username);
+        setEmail(user.email);
+        // Only update preview if no file is currently selected by user
+        if (!selectedAvatar) {
+            setAvatarPreview(user.avatar_url || null);
+        }
+    }
   }, [user, selectedAvatar]);
-
-  // Restore theme on close if not saved
-  useEffect(() => {
-      return () => {
-          if (user?.theme_color) applyTheme(user.theme_color);
-      };
-  }, []);
 
   const fetchBlockedUsers = () => {
       setIsBlockedLoading(true);
@@ -86,7 +60,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
 
   useEffect(() => {
       if (activeTab === 'blocked') {
-          setBlockedUsers([]); 
+          setBlockedUsers([]); // Clear previous state to ensure clean refresh
           fetchBlockedUsers();
       }
   }, [activeTab]);
@@ -99,18 +73,6 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       }
   };
 
-  const handleThemeChange = (color: string) => {
-      setSelectedTheme(color);
-      applyTheme(color); // Real-time preview
-  };
-
-  const handleCustomColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const color = e.target.value;
-      setCustomHex(color);
-      setSelectedTheme(color);
-      applyTheme(color); // Real-time preview
-  };
-
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -119,21 +81,20 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       const updatedUser = await updateProfileAPI({ 
           username, 
           email,
-          avatar: selectedAvatar,
-          theme_color: selectedTheme
+          avatar: selectedAvatar // Envoi du fichier si présent
       });
       
+      // Update context if successful
       if (updatedUser) {
           const currentToken = localStorage.getItem('talkio_auth_token') || '';
           login(updatedUser, currentToken);
+          // FORCE PREVIEW UPDATE to the real server URL to ensure we stop showing the blob
           setAvatarPreview(updatedUser.avatar_url || null);
       }
       setMessage({ text: "Profil mis à jour avec succès !", type: 'success' });
-      setSelectedAvatar(null);
+      setSelectedAvatar(null); // Reset selection
     } catch (err: any) {
       setMessage({ text: err.message || "Erreur lors de la mise à jour", type: 'error' });
-      // Revert theme preview on error
-      if (user?.theme_color) applyTheme(user.theme_color);
     } finally {
       setIsLoading(false);
     }
@@ -164,11 +125,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
 
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-800 relative">
-      <button onClick={() => { 
-          // Reset theme if cancelling without save
-          if (user?.theme_color) applyTheme(user.theme_color);
-          onClose(); 
-      }} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+      <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
         <X size={20} />
       </button>
       
@@ -181,6 +138,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
                     user?.username?.charAt(0).toUpperCase()
                 )}
             </div>
+            {/* Overlay Edit Icon */}
             <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                 <Camera className="text-white" size={24} />
             </div>
@@ -205,11 +163,11 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
             {activeTab === 'profile' && <MotionDiv layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
         </button>
         <button 
-            onClick={() => setActiveTab('settings')}
-            className={`flex-1 pb-2 text-sm font-medium transition-colors relative ${activeTab === 'settings' ? 'text-brand-600 dark:text-brand-400' : 'text-gray-500'}`}
+            onClick={() => setActiveTab('password')}
+            className={`flex-1 pb-2 text-sm font-medium transition-colors relative ${activeTab === 'password' ? 'text-brand-600 dark:text-brand-400' : 'text-gray-500'}`}
         >
-            Paramètres
-            {activeTab === 'settings' && <MotionDiv layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
+            Sécurité
+            {activeTab === 'password' && <MotionDiv layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
         </button>
         <button 
             onClick={() => setActiveTab('blocked')}
@@ -229,67 +187,19 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       </AnimatePresence>
 
       {activeTab === 'profile' && (
-        <form onSubmit={handleUpdateProfile} className="space-y-6">
+        <form onSubmit={handleUpdateProfile} className="space-y-4">
             <Input label="Nom d'utilisateur" value={username} onChange={e => setUsername(e.target.value)} required />
             <Input label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
-            
-            {/* THEME SELECTION */}
-            <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2 ml-1">
-                    Thème de couleur
-                </label>
-                <div className="flex flex-wrap gap-3 items-center">
-                    {PRESET_THEMES.map(color => (
-                        <button
-                            key={color.name}
-                            type="button"
-                            onClick={() => handleThemeChange(color.name)}
-                            className={`w-9 h-9 rounded-full ${color.bg} shadow-sm flex items-center justify-center transition-transform hover:scale-110 relative border-2 ${selectedTheme === color.name ? 'border-white dark:border-gray-900 ring-2 ring-gray-400 dark:ring-gray-500' : 'border-transparent'}`}
-                            title={color.label}
-                        >
-                            {selectedTheme === color.name && (
-                                <Check size={16} className="text-white drop-shadow-md" strokeWidth={3} />
-                            )}
-                        </button>
-                    ))}
-                    
-                    {/* CUSTOM COLOR PICKER */}
-                    <div className="relative group">
-                        <div className={`w-9 h-9 rounded-full bg-gradient-to-tr from-gray-100 to-gray-300 dark:from-gray-700 dark:to-gray-600 flex items-center justify-center cursor-pointer transition-transform hover:scale-110 border-2 ${selectedTheme.startsWith('#') ? 'border-white dark:border-gray-900 ring-2 ring-gray-400 dark:ring-gray-500' : 'border-transparent'}`}>
-                            <Droplet size={16} className={selectedTheme.startsWith('#') ? 'text-brand-500' : 'text-gray-500 dark:text-gray-300'} />
-                        </div>
-                        <input 
-                            type="color" 
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                            value={customHex}
-                            onChange={handleCustomColorChange}
-                            title="Couleur personnalisée"
-                        />
-                    </div>
-                </div>
-                {selectedTheme.startsWith('#') && (
-                    <p className="text-xs text-brand-500 mt-2 font-medium">
-                        Couleur personnalisée active : {selectedTheme}
-                    </p>
-                )}
-            </div>
-
             <Button type="submit" isLoading={isLoading}>Enregistrer</Button>
         </form>
       )}
 
-      {activeTab === 'settings' && (
-        <div className="space-y-6">
-            {/* Security Section */}
-            <div>
-                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3 px-1">Sécurité</h3>
-                <form onSubmit={handleUpdatePassword} className="space-y-4">
-                    <Input label="Ancien mot de passe" type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} required />
-                    <Input label="Nouveau mot de passe" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
-                    <Button type="submit" isLoading={isLoading}>Changer le mot de passe</Button>
-                </form>
-            </div>
-        </div>
+      {activeTab === 'password' && (
+        <form onSubmit={handleUpdatePassword} className="space-y-4">
+            <Input label="Ancien mot de passe" type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} required />
+            <Input label="Nouveau mot de passe" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
+            <Button type="submit" isLoading={isLoading}>Changer le mot de passe</Button>
+        </form>
       )}
 
       {activeTab === 'blocked' && (

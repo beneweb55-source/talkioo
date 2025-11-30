@@ -102,18 +102,17 @@ export const getOnlineUsersAPI = async (): Promise<string[]> => {
 };
 
 // --- PROFILE ---
-export const updateProfileAPI = async (data: { username?: string; email?: string, avatar?: File | null, theme_color?: string }): Promise<User> => {
+export const updateProfileAPI = async (data: { username?: string; email?: string, avatar?: File | null }): Promise<User> => {
     if (data.avatar) {
         const formData = new FormData();
         if (data.username) formData.append('username', data.username);
         if (data.email) formData.append('email', data.email);
-        if (data.theme_color) formData.append('theme_color', data.theme_color);
         formData.append('avatar', data.avatar);
         return await fetchWithAuth('/users/profile', { method: 'PUT', body: formData });
     } else {
         return await fetchWithAuth('/users/profile', { 
             method: 'PUT', 
-            body: JSON.stringify({ username: data.username, email: data.email, theme_color: data.theme_color }) 
+            body: JSON.stringify({ username: data.username, email: data.email }) 
         });
     }
 };
@@ -299,6 +298,18 @@ export const respondToFriendRequestAPI = async (requestId: string, status: 'acce
     const res = await fetchWithAuth(`/friend_requests/${requestId}/respond`, { method: 'POST', body: JSON.stringify({ status }) });
     if (status === 'accepted' && res.conversationId) return { id: res.conversationId } as Conversation;
     return null;
+};
+
+// --- PUSH NOTIFICATIONS ---
+export const getVapidPublicKeyAPI = async (): Promise<{ publicKey: string }> => {
+    return await fetchWithAuth('/push/vapid-public-key');
+};
+
+export const subscribeToPushAPI = async (subscription: PushSubscription): Promise<any> => {
+    return await fetchWithAuth('/push/subscribe', {
+        method: 'POST',
+        body: JSON.stringify(subscription)
+    });
 };
 
 // --- TYPING EVENTS ---

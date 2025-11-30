@@ -15,7 +15,8 @@
     "pg": "^8.11.3",
     "multer": "^2.0.2",
     "cloudinary": "^2.0.1",
-    "socket.io": "^4.7.4"
+    "socket.io": "^4.7.4",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"

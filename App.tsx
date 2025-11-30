@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthScreen } from './components/Auth/AuthScreen';
@@ -12,7 +11,8 @@ import {
   subscribeToConversationsList, getContactsAPI, createGroupConversationAPI, 
   getOnlineUsersAPI, subscribeToUserStatus, subscribeToUserProfileUpdates
 } from './services/api';
-import { MessageCircle, UserPlus, Search, Users, User as UserIcon, Moon, Sun, LogOut, Check, X } from 'lucide-react';
+import { usePushNotifications } from './hooks/usePushNotifications';
+import { MessageCircle, UserPlus, Bell, Search, Users, User as UserIcon, Moon, Sun, LogOut, Check, X, RefreshCw, Copy } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -42,6 +42,9 @@ const Dashboard = () => {
   const [isFriendModalOpen, setIsFriendModalOpen] = useState(false);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   
+  // Notification Modal State
+  const [showNotificationModal, setShowNotificationModal] = useState(false);
+
   // Forms State
   const [newChatTarget, setNewChatTarget] = useState('');
   const [groupName, setGroupName] = useState('');
@@ -49,6 +52,30 @@ const Dashboard = () => {
   const [friendModalLoading, setFriendModalLoading] = useState(false);
   const [friendModalError, setFriendModalError] = useState('');
   const [friendModalSuccess, setFriendModalSuccess] = useState('');
+
+  const { permission, requestPermission } = usePushNotifications(user?.id);
+
+  useEffect(() => {
+    // Check if user has already dismissed or made a choice
+    const dismissed = localStorage.getItem('talkio_notifications_dismissed');
+    
+    // Only show if browser supports it, permission is default (not yet chosen), and not dismissed
+    if ('Notification' in window && permission === 'default' && !dismissed) {
+        // Small delay for better UX
+        const timer = setTimeout(() => setShowNotificationModal(true), 3000);
+        return () => clearTimeout(timer);
+    }
+  }, [permission]);
+
+  const handleEnableNotifications = () => {
+      requestPermission();
+      setShowNotificationModal(false);
+  };
+
+  const handleDismissNotifications = () => {
+      localStorage.setItem('talkio_notifications_dismissed', 'true');
+      setShowNotificationModal(false);
+  };
 
   const toggleTheme = () => {
     setIsDarkMode(!isDarkMode);
@@ -283,6 +310,47 @@ const Dashboard = () => {
         )}
       </AnimatePresence>
 
+      {/* --- NOTIFICATION PERMISSION MODAL --- */}
+      <AnimatePresence>
+        {showNotificationModal && (
+            <MotionDiv 
+                initial={{ opacity: 0, scale: 0.9 }} 
+                animate={{ opacity: 1, scale: 1 }} 
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="fixed bottom-4 right-4 z-[100] bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 max-w-sm"
+            >
+                <div className="flex items-start gap-3">
+                    <div className="p-2 bg-brand-100 dark:bg-brand-900/30 rounded-full text-brand-600">
+                        <Bell size={20} />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-gray-900 dark:text-white text-sm">Activer les notifications ?</h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-3 leading-relaxed">
+                            Ne ratez aucun message important lorsque vous n'êtes pas sur l'application.
+                        </p>
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={handleEnableNotifications} 
+                                className="px-3 py-1.5 text-xs font-semibold bg-brand-500 text-white rounded-lg hover:bg-brand-600 transition-colors shadow-sm"
+                            >
+                                Activer
+                            </button>
+                            <button 
+                                onClick={handleDismissNotifications} 
+                                className="px-3 py-1.5 text-xs font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                            >
+                                Plus tard
+                            </button>
+                        </div>
+                    </div>
+                    <button onClick={handleDismissNotifications} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                        <X size={16} />
+                    </button>
+                </div>
+            </MotionDiv>
+        )}
+      </AnimatePresence>
+
       {/* --- SIDEBAR / MOBILE MAIN VIEW --- */}
       <div className={`
         flex-col w-full md:w-[380px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 z-10 transition-all duration-300
@@ -436,29 +504,12 @@ const Dashboard = () => {
   );
 };
 
-const AppContent = () => {
-  const { user, isLoading } = useAuth();
+const AuthWrapper = () => {
+    const { user, isLoading } = useAuth();
+    if (isLoading) return <div className="h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950"><div className="w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full animate-spin"></div></div>;
+    return user ? <Dashboard /> : <AuthScreen />;
+}
 
-  if (isLoading) {
-    return (
-        <div className="flex h-screen w-full items-center justify-center bg-gray-50 dark:bg-gray-950">
-            <div className="flex flex-col items-center gap-4">
-                <div className="w-12 h-12 border-4 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
-                <p className="text-gray-500 dark:text-gray-400 font-medium animate-pulse">Chargement...</p>
-            </div>
-        </div>
-    );
-  }
-
-  return user ? <Dashboard /> : <AuthScreen />;
-};
-
-const App = () => {
-  return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
-  );
-};
+const App = () => <AuthProvider><AuthWrapper /></AuthProvider>;
 
 export default App;

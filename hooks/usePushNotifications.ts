@@ -18,64 +18,94 @@ const urlBase64ToUint8Array = (base64String: string) => {
 
 export const usePushNotifications = (userId: string | undefined) => {
     const [permission, setPermission] = useState<NotificationPermission>('default');
+    const [isSubscribed, setIsSubscribed] = useState(false);
 
     useEffect(() => {
         if ('Notification' in window) {
             setPermission(Notification.permission);
+            checkSubscriptionStatus();
         }
-    }, []);
+    }, [userId]);
+
+    const checkSubscriptionStatus = async () => {
+        if ('serviceWorker' in navigator) {
+            const registration = await navigator.serviceWorker.getRegistration();
+            if (registration) {
+                const subscription = await registration.pushManager.getSubscription();
+                setIsSubscribed(!!subscription);
+                return !!subscription;
+            }
+        }
+        setIsSubscribed(false);
+        return false;
+    };
 
     const subscribeToPush = useCallback(async () => {
         if (!userId) return;
         
-        // Basic support check
         if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-            console.log("Push notifications not supported on this browser.");
+            console.log("Push notifications not supported.");
             return;
         }
 
         try {
-            // Use a simple relative path string.
             const scriptUrl = '/serviceWorker.js';
-            
             const registration = await navigator.serviceWorker.register(scriptUrl, { scope: '/' });
             await navigator.serviceWorker.ready;
 
-            // Get VAPID Key from Backend
             const { publicKey } = await getVapidPublicKeyAPI();
-            if (!publicKey) throw new Error("No public key returned");
+            if (!publicKey) throw new Error("No public key");
             
             const convertedVapidKey = urlBase64ToUint8Array(publicKey);
 
-            // Subscribe
             const subscription = await registration.pushManager.subscribe({
                 userVisibleOnly: true,
                 applicationServerKey: convertedVapidKey
             });
 
-            // Send Subscription to Backend
             await subscribeToPushAPI(subscription);
-            console.log("Push notifications subscribed successfully.");
+            setIsSubscribed(true);
+            console.log("Push notifications subscribed.");
 
         } catch (error: any) {
-            // Silent fail for common permission/security issues to avoid console spam
-            if (error.name === 'SecurityError' || error.name === 'InvalidStateError' || error.name === 'NotAllowedError') {
-                return;
-            } 
-            console.error("Failed to subscribe to push notifications:", error);
+            if (error.name === 'NotAllowedError') {
+                setPermission('denied');
+            }
+            console.error("Failed to subscribe:", error);
         }
     }, [userId]);
 
-    // If permission is already granted (returning user), ensure subscription is fresh
-    useEffect(() => {
-        if (userId && permission === 'granted') {
-            subscribeToPush();
+    const unsubscribeFromPush = useCallback(async () => {
+        if ('serviceWorker' in navigator) {
+            const registration = await navigator.serviceWorker.getRegistration();
+            if (registration) {
+                const subscription = await registration.pushManager.getSubscription();
+                if (subscription) {
+                    await subscription.unsubscribe();
+                    setIsSubscribed(false);
+                    console.log("Push notifications unsubscribed.");
+                }
+            }
         }
+    }, []);
+
+    // Logic to refresh subscription on load ONLY IF it already exists
+    // This allows "permission: granted" but "subscription: null" (User disabled it in app)
+    useEffect(() => {
+        const sync = async () => {
+            if (userId && permission === 'granted') {
+                const hasSub = await checkSubscriptionStatus();
+                if (hasSub) {
+                    // Only re-run subscription logic (to update backend) if browser actually has a subscription
+                    subscribeToPush();
+                }
+            }
+        };
+        sync();
     }, [userId, permission, subscribeToPush]);
 
     const requestPermission = async () => {
         if (!('Notification' in window)) return;
-        
         try {
             const result = await Notification.requestPermission();
             setPermission(result);
@@ -87,5 +117,17 @@ export const usePushNotifications = (userId: string | undefined) => {
         }
     };
 
-    return { permission, requestPermission };
+    const togglePush = async () => {
+        if (isSubscribed) {
+            await unsubscribeFromPush();
+        } else {
+            if (Notification.permission === 'granted') {
+                await subscribeToPush();
+            } else {
+                await requestPermission();
+            }
+        }
+    };
+
+    return { permission, requestPermission, isSubscribed, togglePush };
 };

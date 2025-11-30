@@ -2,9 +2,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI } from '../../services/api';
 import { User } from '../../types';
+import { usePushNotifications } from '../../hooks/usePushNotifications';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
+import { X, Camera, Shield, UserX, Unlock, Loader2, RefreshCw, AlertTriangle, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -15,7 +16,9 @@ interface UserProfileProps {
 
 export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const { user, login } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'blocked'>('profile');
+  const { isSubscribed, togglePush } = usePushNotifications(user?.id);
+  
+  const [activeTab, setActiveTab] = useState<'profile' | 'settings' | 'blocked'>('profile');
   
   const [username, setUsername] = useState(user?.username || '');
   const [email, setEmail] = useState(user?.email || '');
@@ -34,12 +37,10 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const [isBlockedLoading, setIsBlockedLoading] = useState(false);
   const [blockedError, setBlockedError] = useState('');
 
-  // Sync state if user updates from elsewhere (e.g. Socket in App.tsx)
   useEffect(() => {
     if (user) {
         setUsername(user.username);
         setEmail(user.email);
-        // Only update preview if no file is currently selected by user
         if (!selectedAvatar) {
             setAvatarPreview(user.avatar_url || null);
         }
@@ -60,7 +61,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
 
   useEffect(() => {
       if (activeTab === 'blocked') {
-          setBlockedUsers([]); // Clear previous state to ensure clean refresh
+          setBlockedUsers([]); 
           fetchBlockedUsers();
       }
   }, [activeTab]);
@@ -81,18 +82,16 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       const updatedUser = await updateProfileAPI({ 
           username, 
           email,
-          avatar: selectedAvatar // Envoi du fichier si présent
+          avatar: selectedAvatar 
       });
       
-      // Update context if successful
       if (updatedUser) {
           const currentToken = localStorage.getItem('talkio_auth_token') || '';
           login(updatedUser, currentToken);
-          // FORCE PREVIEW UPDATE to the real server URL to ensure we stop showing the blob
           setAvatarPreview(updatedUser.avatar_url || null);
       }
       setMessage({ text: "Profil mis à jour avec succès !", type: 'success' });
-      setSelectedAvatar(null); // Reset selection
+      setSelectedAvatar(null);
     } catch (err: any) {
       setMessage({ text: err.message || "Erreur lors de la mise à jour", type: 'error' });
     } finally {
@@ -138,7 +137,6 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
                     user?.username?.charAt(0).toUpperCase()
                 )}
             </div>
-            {/* Overlay Edit Icon */}
             <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                 <Camera className="text-white" size={24} />
             </div>
@@ -163,11 +161,11 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
             {activeTab === 'profile' && <MotionDiv layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
         </button>
         <button 
-            onClick={() => setActiveTab('password')}
-            className={`flex-1 pb-2 text-sm font-medium transition-colors relative ${activeTab === 'password' ? 'text-brand-600 dark:text-brand-400' : 'text-gray-500'}`}
+            onClick={() => setActiveTab('settings')}
+            className={`flex-1 pb-2 text-sm font-medium transition-colors relative ${activeTab === 'settings' ? 'text-brand-600 dark:text-brand-400' : 'text-gray-500'}`}
         >
-            Sécurité
-            {activeTab === 'password' && <MotionDiv layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
+            Paramètres
+            {activeTab === 'settings' && <MotionDiv layoutId="tab" className="absolute bottom-[-5px] left-0 right-0 h-0.5 bg-brand-500" />}
         </button>
         <button 
             onClick={() => setActiveTab('blocked')}
@@ -194,12 +192,40 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
         </form>
       )}
 
-      {activeTab === 'password' && (
-        <form onSubmit={handleUpdatePassword} className="space-y-4">
-            <Input label="Ancien mot de passe" type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} required />
-            <Input label="Nouveau mot de passe" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
-            <Button type="submit" isLoading={isLoading}>Changer le mot de passe</Button>
-        </form>
+      {activeTab === 'settings' && (
+        <div className="space-y-6">
+            {/* Preferences Section */}
+            <div>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3 px-1">Préférences</h3>
+                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-brand-100 dark:bg-brand-900/30 text-brand-600 rounded-lg">
+                            <Bell size={20} />
+                        </div>
+                        <div>
+                            <p className="text-sm font-medium dark:text-white">Notifications Push</p>
+                            <p className="text-xs text-gray-500">Recevoir des alertes sur cet appareil</p>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={togglePush}
+                        className={`relative w-11 h-6 rounded-full transition-colors ${isSubscribed ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                    >
+                        <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${isSubscribed ? 'translate-x-5' : ''}`} />
+                    </button>
+                </div>
+            </div>
+
+            {/* Security Section */}
+            <div>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3 px-1">Sécurité</h3>
+                <form onSubmit={handleUpdatePassword} className="space-y-4">
+                    <Input label="Ancien mot de passe" type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} required />
+                    <Input label="Nouveau mot de passe" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
+                    <Button type="submit" isLoading={isLoading}>Changer le mot de passe</Button>
+                </form>
+            </div>
+        </div>
       )}
 
       {activeTab === 'blocked' && (

@@ -106,7 +106,7 @@ const initDB = async () => {
             );
         `);
 
-        // 5. Create Blocked Users (Robust definition - no DEFAULT UUID)
+        // 5. Create Blocked Users (Robust definition - no DEFAULT UUID to allow JS insertion)
         try {
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS blocked_users (
@@ -488,10 +488,11 @@ app.get('/api/users/blocked', authenticateToken, async (req, res) => {
     try {
         // Return real profile data so the user knows WHO they blocked.
         const result = await pool.query(`
-            SELECT u.id, u.username, u.tag, u.avatar_url 
+            SELECT u.id, u.username, u.tag, u.avatar_url, b.created_at
             FROM blocked_users b 
             JOIN users u ON b.blocked_id = u.id 
             WHERE b.blocker_id = $1
+            ORDER BY b.created_at DESC
         `, [req.user.id]);
         
         res.json(result.rows);

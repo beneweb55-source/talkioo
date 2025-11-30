@@ -42,6 +42,9 @@ const Dashboard = () => {
   const [isFriendModalOpen, setIsFriendModalOpen] = useState(false);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   
+  // Notification Modal State
+  const [showNotificationModal, setShowNotificationModal] = useState(false);
+
   // Forms State
   const [newChatTarget, setNewChatTarget] = useState('');
   const [groupName, setGroupName] = useState('');
@@ -50,7 +53,29 @@ const Dashboard = () => {
   const [friendModalError, setFriendModalError] = useState('');
   const [friendModalSuccess, setFriendModalSuccess] = useState('');
 
-  usePushNotifications(user?.id);
+  const { permission, requestPermission } = usePushNotifications(user?.id);
+
+  useEffect(() => {
+    // Check if user has already dismissed or made a choice
+    const dismissed = localStorage.getItem('talkio_notifications_dismissed');
+    
+    // Only show if browser supports it, permission is default (not yet chosen), and not dismissed
+    if ('Notification' in window && permission === 'default' && !dismissed) {
+        // Small delay for better UX
+        const timer = setTimeout(() => setShowNotificationModal(true), 3000);
+        return () => clearTimeout(timer);
+    }
+  }, [permission]);
+
+  const handleEnableNotifications = () => {
+      requestPermission();
+      setShowNotificationModal(false);
+  };
+
+  const handleDismissNotifications = () => {
+      localStorage.setItem('talkio_notifications_dismissed', 'true');
+      setShowNotificationModal(false);
+  };
 
   const toggleTheme = () => {
     setIsDarkMode(!isDarkMode);
@@ -104,7 +129,27 @@ const Dashboard = () => {
         }
     });
 
-    return () => { unsubReq(); unsubConv(); unsubStatus(); unsubProfile(); };
+    // AUTO-RELOAD ON FOCUS (Fix desync issues)
+    const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+            console.log("App foregrounded: Refreshing data...");
+            fetchData();
+        }
+    };
+    
+    // Also trigger on window focus for desktop behavior
+    const handleWindowFocus = () => {
+        fetchData();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => { 
+        unsubReq(); unsubConv(); unsubStatus(); unsubProfile(); 
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('focus', handleWindowFocus);
+    };
   }, [user, token]);
 
   const handleCreateGroup = async (e: React.FormEvent) => {
@@ -265,6 +310,47 @@ const Dashboard = () => {
         )}
       </AnimatePresence>
 
+      {/* --- NOTIFICATION PERMISSION MODAL --- */}
+      <AnimatePresence>
+        {showNotificationModal && (
+            <MotionDiv 
+                initial={{ opacity: 0, scale: 0.9 }} 
+                animate={{ opacity: 1, scale: 1 }} 
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="fixed bottom-4 right-4 z-[100] bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 max-w-sm"
+            >
+                <div className="flex items-start gap-3">
+                    <div className="p-2 bg-brand-100 dark:bg-brand-900/30 rounded-full text-brand-600">
+                        <Bell size={20} />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-gray-900 dark:text-white text-sm">Activer les notifications ?</h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-3 leading-relaxed">
+                            Ne ratez aucun message important lorsque vous n'êtes pas sur l'application.
+                        </p>
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={handleEnableNotifications} 
+                                className="px-3 py-1.5 text-xs font-semibold bg-brand-500 text-white rounded-lg hover:bg-brand-600 transition-colors shadow-sm"
+                            >
+                                Activer
+                            </button>
+                            <button 
+                                onClick={handleDismissNotifications} 
+                                className="px-3 py-1.5 text-xs font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                            >
+                                Plus tard
+                            </button>
+                        </div>
+                    </div>
+                    <button onClick={handleDismissNotifications} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                        <X size={16} />
+                    </button>
+                </div>
+            </MotionDiv>
+        )}
+      </AnimatePresence>
+
       {/* --- SIDEBAR / MOBILE MAIN VIEW --- */}
       <div className={`
         flex-col w-full md:w-[380px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 z-10 transition-all duration-300
@@ -300,8 +386,8 @@ const Dashboard = () => {
                     </div>
                 </div>
 
-                {/* Navigation Tabs (Mobile & Desktop) */}
-                <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-xl">
+                {/* Navigation Tabs (Hidden on Mobile, Visible on Desktop) */}
+                <div className="hidden md:flex p-1 bg-gray-100 dark:bg-gray-800 rounded-xl">
                     <button 
                         onClick={() => setMobileView('chats')} 
                         className={`flex-1 py-1.5 text-sm font-medium rounded-lg transition-all ${mobileView === 'chats' ? 'bg-white dark:bg-gray-700 shadow-sm text-brand-600 dark:text-brand-400' : 'text-gray-500 dark:text-gray-400'}`}

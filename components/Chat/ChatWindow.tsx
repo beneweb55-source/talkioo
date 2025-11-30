@@ -318,7 +318,26 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }));
     });
 
-    return () => { unsubscribeMsgs(); unsubscribeTyping(); unsubscribeReads(); unsubscribeReactions(); unsubscribeProfile(); };
+    // REFRESH ON FOCUS
+    const handleRefresh = async () => {
+        if (document.visibilityState === 'visible') {
+            console.log("Chat focused: Refreshing messages...");
+            try {
+                const msgs = await getMessagesAPI(conversation.id);
+                setMessages(msgs);
+                await markMessagesAsReadAPI(conversation.id);
+            } catch (e) { console.error("Auto-refresh failed", e); }
+        }
+    };
+
+    document.addEventListener('visibilitychange', handleRefresh);
+    window.addEventListener('focus', handleRefresh);
+
+    return () => { 
+        unsubscribeMsgs(); unsubscribeTyping(); unsubscribeReads(); unsubscribeReactions(); unsubscribeProfile(); 
+        document.removeEventListener('visibilitychange', handleRefresh);
+        window.removeEventListener('focus', handleRefresh);
+    };
   }, [conversation.id, currentUser.id, otherUserId]);
 
   // -- AUDIO RECORDING LOGIC --

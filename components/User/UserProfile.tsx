@@ -55,6 +55,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
 
   useEffect(() => {
       if (activeTab === 'blocked') {
+          setBlockedUsers([]); // Clear previous state to ensure clean refresh
           fetchBlockedUsers();
       }
   }, [activeTab]);

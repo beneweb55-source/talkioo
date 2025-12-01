@@ -4,7 +4,7 @@ import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI
 import { User } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera, Palette, Unlock, Loader2, RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import { X, Camera, Palette, Unlock, Loader2, RefreshCw, AlertTriangle, Check, MessageCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -35,6 +35,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const [selectedAvatar, setSelectedAvatar] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(user?.avatar_url || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const customColorInputRef = useRef<HTMLInputElement>(null);
   
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -98,13 +99,15 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
     } catch (err: any) { setMessage({ text: err.message, type: 'error' }); } finally { setIsLoading(false); }
   };
 
+  const isCustomColor = !THEME_PRESETS.find(p => p.color === themeColor);
+
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-md p-6 border border-gray-100 dark:border-gray-800 relative">
       <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><X size={20} /></button>
       
       <div className="flex flex-col items-center mb-4">
         <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-            <div className="h-20 w-20 rounded-full flex items-center justify-center text-white text-2xl font-bold shadow-lg overflow-hidden border-4 border-white dark:border-gray-800" style={{ backgroundColor: themeColor }}>
+            <div className="h-20 w-20 rounded-full flex items-center justify-center text-white text-2xl font-bold shadow-lg overflow-hidden border-4 border-white dark:border-gray-800 transition-colors duration-300" style={{ backgroundColor: themeColor }}>
                 {avatarPreview ? <img src={avatarPreview} className="w-full h-full object-cover" /> : user?.username?.charAt(0).toUpperCase()}
             </div>
             <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Camera className="text-white" size={20} /></div>
@@ -138,23 +141,68 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       )}
 
       {activeTab === 'appearance' && (
-          <div className="space-y-6">
-              <div>
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3 flex items-center gap-2"><Palette size={14}/> Thème & Couleurs</h3>
-                  <div className="grid grid-cols-4 gap-3 mb-4">
+          <div className="space-y-8">
+              <div className="flex flex-col items-center">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-5">Choisissez votre style</h3>
+                  
+                  <div className="flex flex-wrap justify-center gap-4">
                       {THEME_PRESETS.map(preset => (
-                          <button key={preset.color} onClick={() => { setThemeColor(preset.color); applyTheme(preset.color); }} className={`aspect-square rounded-xl flex flex-col items-center justify-center gap-1 transition-all shadow-sm border-2 ${themeColor === preset.color ? 'border-gray-900 dark:border-white scale-105' : 'border-transparent bg-gray-50 dark:bg-gray-800'}`}>
-                              <div className="w-6 h-6 rounded-full" style={{ backgroundColor: preset.color }}></div>
-                              <span className="text-[10px] text-gray-500">{preset.name.split(' ')[0]}</span>
+                          <button 
+                            key={preset.color} 
+                            onClick={() => { setThemeColor(preset.color); applyTheme(preset.color); }}
+                            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 relative shadow-sm ${themeColor === preset.color ? 'scale-110 ring-2 ring-offset-2 ring-brand-500 dark:ring-offset-gray-900' : 'hover:scale-105'}`}
+                            style={{ backgroundColor: preset.color }}
+                            title={preset.name}
+                          >
+                              {themeColor === preset.color && <Check size={20} className="text-white drop-shadow-md" strokeWidth={3} />}
                           </button>
                       ))}
+
+                      {/* Custom Picker Button */}
+                      <div className="relative">
+                          <button 
+                            onClick={() => customColorInputRef.current?.click()}
+                            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 relative shadow-sm bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-600 ${isCustomColor ? 'scale-110 ring-2 ring-offset-2 ring-brand-500 dark:ring-offset-gray-900' : 'hover:scale-105'}`}
+                            title="Couleur personnalisée"
+                          >
+                              {isCustomColor && <Check size={20} className="text-white drop-shadow-md" strokeWidth={3} />}
+                          </button>
+                          <input 
+                            ref={customColorInputRef}
+                            type="color" 
+                            value={themeColor} 
+                            onChange={(e) => { setThemeColor(e.target.value); applyTheme(e.target.value); }} 
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" 
+                          />
+                      </div>
                   </div>
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                      <input type="color" value={themeColor} onChange={(e) => { setThemeColor(e.target.value); applyTheme(e.target.value); }} className="w-10 h-10 rounded-full border-none cursor-pointer bg-transparent" />
-                      <div className="flex-1"><p className="text-sm font-medium dark:text-white">Couleur personnalisée</p><p className="text-xs text-gray-500">Touchez le cercle pour choisir</p></div>
+                  
+                  <p className="text-xs text-brand-600 dark:text-brand-400 mt-4 font-medium px-3 py-1 bg-brand-50 dark:bg-brand-900/30 rounded-full">
+                      {THEME_PRESETS.find(p => p.color === themeColor)?.name || "Couleur personnalisée"}
+                  </p>
+              </div>
+
+              {/* Live Preview Card */}
+              <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700/50 select-none">
+                  <div className="flex items-center gap-3 mb-4">
+                      <div className="h-10 w-10 rounded-full bg-brand-500 flex items-center justify-center text-white shadow-lg shadow-brand-500/30 transition-colors duration-300">
+                          <MessageCircle size={20} />
+                      </div>
+                      <div className="space-y-1.5 flex-1">
+                          <div className="h-2 w-24 bg-gray-200 dark:bg-gray-700 rounded-full"></div>
+                          <div className="h-2 w-16 bg-gray-100 dark:bg-gray-800 rounded-full"></div>
+                      </div>
+                  </div>
+                  <div className="flex justify-end">
+                      <div className="bg-brand-500 text-white px-4 py-2 rounded-2xl rounded-tr-sm text-sm font-medium shadow-md shadow-brand-500/20 transition-colors duration-300">
+                          Aperçu du message ✨
+                      </div>
                   </div>
               </div>
-              <Button onClick={handleSaveTheme} isLoading={isLoading}>Appliquer ce thème</Button>
+
+              <Button onClick={handleSaveTheme} isLoading={isLoading} className="w-full py-3 rounded-xl font-bold shadow-lg shadow-brand-500/20">
+                  Valider ce thème
+              </Button>
           </div>
       )}
 

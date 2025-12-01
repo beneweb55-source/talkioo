@@ -3,10 +3,15 @@ import { io, Socket } from 'socket.io-client';
 import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction, GroupMember, Sticker } from '../types';
 
 // --- CONFIGURATION ---
-const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const isLocal = typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' || 
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname.startsWith('192.168.') ||
+    window.location.hostname.startsWith('10.')
+);
 
-// En local, on utilise une chaine vide '' pour utiliser le proxy Vite
-const API_BASE = isLocal ? '' : 'https://talkioo.onrender.com';
+// In local dev, target port 3001. In prod, use relative API path.
+const API_BASE = isLocal ? `http://${window.location.hostname}:3001` : 'https://talkioo.onrender.com';
 const API_URL = `${API_BASE}/api`;
 
 console.log(`[Talkio] API Target: ${API_URL}`);
@@ -17,17 +22,14 @@ let socket: Socket;
 export const connectSocket = (token: string, userId: string) => {
     if (socket && socket.connected) return;
     
-    // Le socket local doit viser le port 3001 directement
-    const SOCKET_URL = isLocal ? 'http://localhost:3001' : 'https://talkioo.onrender.com';
-
-    socket = io(SOCKET_URL, {
+    // Connect to the same host as API
+    socket = io(API_BASE, {
         auth: { token },
         query: { userId }, 
-        // Polling first for better firewall/proxy compatibility, then upgrade to ws
         transports: ['polling', 'websocket'], 
         reconnectionAttempts: 10,
         reconnectionDelay: 2000,
-        timeout: 60000 // 60s timeout
+        timeout: 60000
     });
 
     socket.on('connect', () => {
@@ -102,17 +104,18 @@ export const getOnlineUsersAPI = async (): Promise<string[]> => {
 };
 
 // --- PROFILE ---
-export const updateProfileAPI = async (data: { username?: string; email?: string, avatar?: File | null }): Promise<User> => {
+export const updateProfileAPI = async (data: { username?: string; email?: string, theme_color?: string, avatar?: File | null }): Promise<User> => {
     if (data.avatar) {
         const formData = new FormData();
         if (data.username) formData.append('username', data.username);
         if (data.email) formData.append('email', data.email);
+        if (data.theme_color) formData.append('theme_color', data.theme_color);
         formData.append('avatar', data.avatar);
         return await fetchWithAuth('/users/profile', { method: 'PUT', body: formData });
     } else {
         return await fetchWithAuth('/users/profile', { 
             method: 'PUT', 
-            body: JSON.stringify({ username: data.username, email: data.email }) 
+            body: JSON.stringify({ username: data.username, email: data.email, theme_color: data.theme_color }) 
         });
     }
 };
@@ -305,10 +308,10 @@ export const getVapidPublicKeyAPI = async (): Promise<{ publicKey: string }> => 
     return await fetchWithAuth('/push/vapid-public-key');
 };
 
-export const subscribeToPushAPI = async (subscription: PushSubscription): Promise<any> => {
-    return await fetchWithAuth('/push/subscribe', {
-        method: 'POST',
-        body: JSON.stringify(subscription)
+export const subscribeToPushAPI = async (subscription: PushSubscription): Promise<void> => {
+    return await fetchWithAuth('/push/subscribe', { 
+        method: 'POST', 
+        body: JSON.stringify(subscription) 
     });
 };
 

@@ -7,8 +7,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
-const crypto = require('crypto'); // Built-in Node module
-const webpush = require('web-push');
+const crypto = require('crypto');
 
 // --- CONFIGURATION ---
 const app = express();
@@ -23,33 +22,11 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET || 'F0OXEL6772gWT1hqzDnWCZj1wGg' 
 });
 
-// --- WEB PUSH CONFIGURATION ---
-// Generate keys if not in env (For development convenience)
-const vapidKeys = {
-    publicKey: process.env.VAPID_PUBLIC_KEY,
-    privateKey: process.env.VAPID_PRIVATE_KEY
-};
-
-if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
-    console.log("⚠️ VAPID Keys not found in env. Generating temporary keys...");
-    const generated = webpush.generateVAPIDKeys();
-    vapidKeys.publicKey = generated.publicKey;
-    vapidKeys.privateKey = generated.privateKey;
-    console.log("👉 VAPID_PUBLIC_KEY:", vapidKeys.publicKey);
-    console.log("👉 VAPID_PRIVATE_KEY:", vapidKeys.privateKey);
-}
-
-webpush.setVapidDetails(
-    process.env.VAPID_SUBJECT || 'mailto:admin@talkio.app',
-    vapidKeys.publicKey,
-    vapidKeys.privateKey
-);
-
 // Configuration Multer
 const storage = multer.memoryStorage();
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+    limits: { fileSize: 50 * 1024 * 1024 }
 });
 
 const connectionString = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_XPSO1Fe6aqZk@ep-misty-queen-agi42tnv-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require';
@@ -59,7 +36,6 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// --- HELPER: UUID Generator (Node.js Safe Polyfill) ---
 function generateUUID() {
     if (crypto.randomUUID) return crypto.randomUUID();
     return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
@@ -71,14 +47,8 @@ function generateUUID() {
 const initDB = async () => {
     try {
         console.log("Initializing Database...");
+        try { await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'); } catch (e) {}
 
-        try {
-            await pool.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto"');
-        } catch (e) {
-            console.warn("Could not create extension pgcrypto:", e.message);
-        }
-
-        // 1. Core Tables
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -87,6 +57,7 @@ const initDB = async () => {
                 password_hash TEXT NOT NULL,
                 tag TEXT NOT NULL,
                 avatar_url TEXT,
+                theme_color TEXT DEFAULT '#f97316',
                 is_online BOOLEAN DEFAULT FALSE,
                 socket_id TEXT,
                 created_at TIMESTAMPTZ DEFAULT NOW()
@@ -119,10 +90,6 @@ const initDB = async () => {
                 updated_at TIMESTAMPTZ,
                 deleted_at TIMESTAMPTZ
             );
-        `);
-
-        // 2. Auxiliary Tables
-        await pool.query(`
             CREATE TABLE IF NOT EXISTS friend_requests (
                 id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
                 sender_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -150,46 +117,17 @@ const initDB = async () => {
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 UNIQUE(message_id, user_id, emoji)
             );
-        `);
-
-        // 3. Blocked Users (Robust)
-        try {
-            await pool.query(`
-                CREATE TABLE IF NOT EXISTS blocked_users (
-                    id UUID PRIMARY KEY,
-                    blocker_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                    blocked_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE(blocker_id, blocked_id)
-                )
-            `);
-            await pool.query(`CREATE INDEX IF NOT EXISTS idx_blocked_blocker ON blocked_users(blocker_id)`);
-        } catch (e) {
-            console.error("Error creating blocked_users table:", e.message);
-        }
-
-        // 4. Push Subscriptions
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS push_subscriptions (
-                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-                user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                endpoint TEXT NOT NULL,
-                p256dh TEXT NOT NULL,
-                auth TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                id UUID PRIMARY KEY,
+                blocker_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                blocked_id UUID REFERENCES users(id) ON DELETE CASCADE,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(user_id, endpoint)
-            )
+                UNIQUE(blocker_id, blocked_id)
+            );
         `);
-        
-        // Add columns if they don't exist (migrations)
-        await pool.query(`
-            ALTER TABLE participants ADD COLUMN IF NOT EXISTS last_deleted_at TIMESTAMPTZ;
-            ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_type TEXT DEFAULT 'text';
-            ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_url TEXT;
-            ALTER TABLE messages ADD COLUMN IF NOT EXISTS replied_to_message_id UUID REFERENCES messages(id);
-            ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
-            ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-        `);
+
+        // Migration pour le thème (si la colonne n'existe pas)
+        await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_color TEXT DEFAULT '#f97316'`);
 
         console.log("Database initialized successfully");
     } catch (err) {
@@ -197,21 +135,14 @@ const initDB = async () => {
     }
 };
 
-// Call initDB on startup
 initDB();
 
 // --- MIDDLEWARE ---
-app.use((req, res, next) => {
-    next();
-});
-
 app.use(cors({
-    origin: true,
+    origin: true, 
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization']
+    credentials: true
 })); 
-
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -224,16 +155,21 @@ const io = new Server(server, {
 
 io.on('connection', async (socket) => {
     const userId = socket.handshake.query.userId;
-    
     if (userId) {
         try {
             await pool.query('UPDATE users SET is_online = TRUE, socket_id = $1 WHERE id = $2', [socket.id, userId]);
             io.emit('USER_STATUS_UPDATE', { userId: userId, isOnline: true });
             socket.join(`user:${userId}`);
-        } catch (err) { console.error("Erreur statut:", err.message); }
+        } catch (err) {}
     }
-
     socket.on('join_room', (roomId) => socket.join(roomId));
+    
+    socket.on('typing_start', ({ conversationId }) => {
+        if(userId) socket.to(conversationId).emit('typing_update', { conversationId, userId, isTyping: true });
+    });
+    socket.on('typing_stop', ({ conversationId }) => {
+        if(userId) socket.to(conversationId).emit('typing_update', { conversationId, userId, isTyping: false });
+    });
 
     socket.on('disconnect', async () => { 
         try {
@@ -243,11 +179,10 @@ io.on('connection', async (socket) => {
                 await pool.query('UPDATE users SET is_online = FALSE, socket_id = NULL WHERE id = $1', [disconnectedUserId]);
                 io.emit('USER_STATUS_UPDATE', { userId: disconnectedUserId, isOnline: false });
             }
-        } catch (err) { console.error("Erreur déconnexion:", err.message); }
+        } catch (err) {}
     });
 });
 
-// --- AUTH MIDDLEWARE ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -259,234 +194,17 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
-// --- PUSH NOTIFICATION ROUTES ---
-
-app.get('/api/push/vapid-public-key', authenticateToken, (req, res) => {
-    res.json({ publicKey: vapidKeys.publicKey });
-});
-
-app.post('/api/push/subscribe', authenticateToken, async (req, res) => {
-    const subscription = req.body;
-    const userId = req.user.id;
-
-    if (!subscription || !subscription.endpoint || !subscription.keys) {
-        return res.status(400).json({ error: "Invalid subscription object" });
-    }
-
-    try {
-        await pool.query(`
-            INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) 
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id, endpoint) DO NOTHING
-        `, [userId, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]);
-        
-        res.status(201).json({ success: true });
-    } catch (err) {
-        console.error("Subscription Error:", err);
-        res.status(500).json({ error: "Failed to save subscription" });
-    }
-});
-
-// --- HELPER TO SEND NOTIFICATIONS ---
-const sendPushNotification = async (userId, payload) => {
-    try {
-        const subs = await pool.query('SELECT * FROM push_subscriptions WHERE user_id = $1', [userId]);
-        const notifications = subs.rows.map(sub => {
-            const pushConfig = {
-                endpoint: sub.endpoint,
-                keys: { p256dh: sub.p256dh, auth: sub.auth }
-            };
-            return webpush.sendNotification(pushConfig, JSON.stringify(payload))
-                .catch(err => {
-                    if (err.statusCode === 410 || err.statusCode === 404) {
-                        // Delete expired subscription
-                        pool.query('DELETE FROM push_subscriptions WHERE id = $1', [sub.id]);
-                    }
-                });
-        });
-        await Promise.all(notifications);
-    } catch (err) {
-        console.error(`Push Error for user ${userId}:`, err);
-    }
-};
-
 // --- ROUTES ---
 
-// ... (Other routes remain the same until messages)
+app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
 
-app.post('/api/messages', authenticateToken, upload.single('media'), async (req, res) => {
-    const { conversation_id, replied_to_message_id } = req.body;
-    const senderId = req.user.id;
-    
-    // ... (Validation logic omitted for brevity, same as before) ...
-    // Check if blocked OR not friend (for 1:1)
-    const convCheck = await pool.query('SELECT is_group FROM conversations WHERE id = $1', [conversation_id]);
-    if (!convCheck.rows[0]) return res.status(404).json({ error: "Conversation introuvable" });
-
-    // (Friend/Block check logic here...)
-    
-    let content = req.body.content;
-    if (!content || content === 'undefined' || content === 'null') content = '';
-    
-    let attachmentUrl = req.body.attachment_url || null;
-    let messageType = req.body.message_type || 'text';
-
-    if (req.file) {
-        try {
-            const uploadResult = await new Promise((resolve, reject) => {
-                const uploadStream = cloudinary.uploader.upload_stream(
-                    { folder: `chat-app/conversations/${conversation_id}`, resource_type: "auto" },
-                    (error, result) => { if (error) reject(error); else resolve(result); }
-                );
-                uploadStream.end(req.file.buffer);
-            });
-            attachmentUrl = uploadResult.secure_url;
-            if (messageType !== 'audio') messageType = 'image';
-        } catch (error) { return res.status(500).json({ error: "Échec upload média." }); }
-    }
-
-    if (!attachmentUrl && content.trim() === '') return res.status(400).json({ error: 'Message vide.' });
-
-    try {
-        const result = await pool.query(
-            'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id, message_type, attachment_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-            [conversation_id, senderId, content, replied_to_message_id || null, messageType, attachmentUrl] 
-        );
-        const msg = result.rows[0];
-
-        await pool.query('INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [msg.id, senderId]);
-        await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
-
-        const userRes = await pool.query('SELECT username, tag, avatar_url FROM users WHERE id = $1', [senderId]);
-        const sender = userRes.rows[0];
-        
-        // Prepare Full Message
-        let replyData = null;
-        if (msg.replied_to_message_id) {
-             const rRes = await pool.query(`SELECT m.content, u.username, u.tag FROM messages m LEFT JOIN users u ON m.sender_id = u.id WHERE m.id = $1`, [msg.replied_to_message_id]);
-             if (rRes.rows[0]) replyData = { id: msg.replied_to_message_id, content: rRes.rows[0].content, sender: `${rRes.rows[0].username}#${rRes.rows[0].tag}` };
-        }
-
-        const fullMsg = { 
-            id: msg.id,
-            conversation_id: msg.conversation_id,
-            sender_id: msg.sender_id,
-            content: msg.content === null ? "" : msg.content,
-            created_at: msg.created_at,
-            sender_username: `${sender.username}#${sender.tag}`, 
-            sender_avatar: sender.avatar_url,
-            read_count: 0, 
-            reply: replyData,
-            message_type: messageType,
-            attachment_url: attachmentUrl, 
-            image_url: attachmentUrl, 
-            reactions: []
-        }; 
-
-        // Socket.IO Emit
-        io.to(conversation_id).emit('new_message', fullMsg);
-        const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversation_id]);
-        pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId: conversation_id }));
-        
-        // --- SEND PUSH NOTIFICATIONS ---
-        // Find other participants who are NOT online (socket connection check is ideal but simpler to just send and let OS filter)
-        // Or send to all offline participants. Here we send to all others.
-        const recipients = pRes.rows.filter(r => r.user_id !== senderId);
-        
-        const pushTitle = `${sender.username}`;
-        let pushBody = content;
-        if (messageType === 'image') pushBody = '📷 Photo';
-        if (messageType === 'audio') pushBody = '🎤 Message vocal';
-        if (messageType === 'sticker') pushBody = 'Sticker';
-        if (!pushBody && attachmentUrl) pushBody = 'Média';
-
-        const pushPayload = {
-            title: pushTitle,
-            body: pushBody,
-            icon: sender.avatar_url || '/logo192.png',
-            data: { conversationId: conversation_id }
-        };
-
-        // Fire and forget
-        recipients.forEach(r => sendPushNotification(r.user_id, pushPayload));
-
-        res.json(fullMsg);
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- RE-ADD EXISTING ROUTES THAT WERE OMITTED ABOVE TO KEEP FILE COMPLETE ---
-
-app.get('/api/gifs/search', async (req, res) => {
-    const { q, pos } = req.query;
-    const apiKey = process.env.TENOR_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" });
-    try {
-        let url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=${apiKey}&client_key=talkio&limit=20&media_filter=minimal`;
-        if (pos) url += `&pos=${pos}`;
-        const response = await fetch(url);
-        res.json(await response.json());
-    } catch (error) { res.status(500).json({ error: "Failed to fetch GIFs" }); }
-});
-
-app.get('/api/gifs/trending', async (req, res) => {
-    const { pos } = req.query;
-    const apiKey = process.env.TENOR_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" });
-    try {
-        let url = `https://tenor.googleapis.com/v2/featured?key=${apiKey}&client_key=talkio&limit=20&media_filter=minimal`;
-        if (pos) url += `&pos=${pos}`;
-        const response = await fetch(url);
-        res.json(await response.json());
-    } catch (error) { res.status(500).json({ error: "Failed to fetch GIFs" }); }
-});
-
-app.get('/api/stickers', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM stickers WHERE user_id IS NULL OR user_id = $1 ORDER BY created_at DESC', [req.user.id]);
-        res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/stickers', authenticateToken, upload.single('sticker'), async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: "Aucun fichier" });
-    try {
-        const uploadResult = await new Promise((resolve, reject) => {
-            const uploadStream = cloudinary.uploader.upload_stream({ folder: `chat-app/stickers/${req.user.id}`, resource_type: "image" }, (error, result) => { if (error) reject(error); else resolve(result); });
-            uploadStream.end(req.file.buffer);
-        });
-        const result = await pool.query('INSERT INTO stickers (url, user_id) VALUES ($1, $2) RETURNING *', [uploadResult.secure_url, req.user.id]);
-        res.json(result.rows[0]);
-    } catch (err) { res.status(500).json({ error: "Erreur upload" }); }
-});
-
-app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
-    const messageId = req.params.id;
-    const userId = req.user.id;
-    const { emoji } = req.body; 
-    try {
-        const msgCheck = await pool.query('SELECT conversation_id FROM messages WHERE id = $1', [messageId]);
-        if (msgCheck.rows.length === 0) return res.status(404).json({ error: "Message introuvable" });
-        const conversationId = msgCheck.rows[0].conversation_id;
-        
-        const existing = await pool.query('SELECT id FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [messageId, userId, emoji]);
-        if (existing.rows.length > 0) {
-            await pool.query('DELETE FROM message_reactions WHERE id = $1', [existing.rows[0].id]);
-        } else {
-            await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [messageId, userId, emoji]);
-        }
-        
-        const resReactions = await pool.query(`SELECT mr.emoji, mr.user_id, u.username FROM message_reactions mr JOIN users u ON mr.user_id = u.id WHERE mr.message_id = $1`, [messageId]);
-        io.to(conversationId).emit('message_reaction_update', { messageId, reactions: resReactions.rows });
-        res.json({ success: true, reactions: resReactions.rows });
-    } catch (err) { res.status(500).json({ error: "Erreur serveur" }); }
-});
-
+// --- AUTH ---
 app.post('/api/auth/register', async (req, res) => {
     let { username, email, password } = req.body;
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         const tag = Math.floor(1000 + Math.random() * 9000).toString();
-        const result = await pool.query('INSERT INTO users (username, email, password_hash, tag) VALUES ($1, $2, $3, $4) RETURNING id, username, tag, email, created_at, avatar_url', [username.trim(), email.toLowerCase().trim(), hashedPassword, tag]);
+        const result = await pool.query('INSERT INTO users (username, email, password_hash, tag) VALUES ($1, $2, $3, $4) RETURNING id, username, tag, email, created_at, avatar_url, theme_color', [username.trim(), email.toLowerCase().trim(), hashedPassword, tag]);
         const user = result.rows[0];
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET);
         res.json({ user, token });
@@ -505,15 +223,9 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/users/online', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT id FROM users WHERE is_online = TRUE');
-        res.json(result.rows.map(u => u.id));
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
+// --- PROFILE ---
 app.put('/api/users/profile', authenticateToken, upload.single('avatar'), async (req, res) => {
-    const { username, email } = req.body;
+    const { username, email, theme_color } = req.body;
     let avatarUrl = null;
     if (req.file) {
         try {
@@ -525,7 +237,10 @@ app.put('/api/users/profile', authenticateToken, upload.single('avatar'), async 
         } catch (error) { return res.status(500).json({ error: "Erreur upload" }); }
     }
     try {
-        const result = await pool.query('UPDATE users SET username = COALESCE($1, username), email = COALESCE($2, email), avatar_url = COALESCE($3, avatar_url) WHERE id = $4 RETURNING id, username, tag, email, created_at, avatar_url', [username, email, avatarUrl, req.user.id]);
+        const result = await pool.query(
+            'UPDATE users SET username = COALESCE($1, username), email = COALESCE($2, email), avatar_url = COALESCE($3, avatar_url), theme_color = COALESCE($4, theme_color) WHERE id = $5 RETURNING id, username, tag, email, created_at, avatar_url, theme_color', 
+            [username, email, avatarUrl, theme_color, req.user.id]
+        );
         io.emit('USER_PROFILE_UPDATE', result.rows[0]);
         res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -544,50 +259,63 @@ app.put('/api/users/password', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/users/blocked', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query(`SELECT u.id, u.username, u.tag, u.avatar_url, b.created_at FROM blocked_users b JOIN users u ON b.blocked_id = u.id WHERE b.blocker_id = $1 ORDER BY b.created_at DESC`, [req.user.id]);
-        res.json(result.rows);
-    } catch (err) { 
-        if (err.code === '42P01') {
-             try { await pool.query(`CREATE TABLE IF NOT EXISTS blocked_users (id UUID PRIMARY KEY, blocker_id UUID REFERENCES users(id) ON DELETE CASCADE, blocked_id UUID REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(blocker_id, blocked_id))`); return res.json([]); } catch (e) { return res.status(500).json({ error: e.message }); }
-        }
-        res.status(500).json({ error: err.message }); 
-    }
-});
+// --- SPECIFIC ROUTES BEFORE ID ROUTE ---
 
-app.get('/api/users/:id', authenticateToken, async (req, res) => {
+app.get('/api/contacts', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, username, tag, email, is_online, avatar_url FROM users WHERE id = $1', [req.params.id]);
-        res.json(result.rows[0]);
+        const query = `SELECT DISTINCT ON (u.id) u.id, u.username, u.tag, u.email, u.is_online, u.avatar_url, fr.status AS friend_status, c.id AS conversation_id FROM friend_requests fr JOIN users u ON (CASE WHEN fr.sender_id = $1 THEN fr.receiver_id ELSE fr.sender_id END) = u.id LEFT JOIN participants p1 ON p1.user_id = fr.sender_id AND p1.conversation_id IN (SELECT p2.conversation_id FROM participants p2 WHERE p2.user_id = fr.receiver_id) LEFT JOIN conversations c ON c.id = p1.conversation_id AND c.is_group = FALSE WHERE (fr.sender_id = $1 OR fr.receiver_id = $1) AND fr.status = 'accepted' ORDER BY u.id`;
+        const result = await pool.query(query, [req.user.id]);
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/users/block', authenticateToken, async (req, res) => {
-    const { userId } = req.body;
-    if (!userId || userId === req.user.id) return res.status(400).json({ error: "Invalid User" });
+app.get('/api/friend_requests', authenticateToken, async (req, res) => {
     try {
-        const id = generateUUID();
-        await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]);
-        res.json({ success: true });
-    } catch (err) { 
-        if (err.code === '42P01') {
-            try {
-                await pool.query(`CREATE TABLE IF NOT EXISTS blocked_users (id UUID PRIMARY KEY, blocker_id UUID REFERENCES users(id) ON DELETE CASCADE, blocked_id UUID REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(blocker_id, blocked_id))`);
-                const id = generateUUID();
-                await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]);
-                return res.json({ success: true });
-            } catch(e) { return res.status(500).json({ error: e.message }); }
-        }
-        res.status(500).json({ error: err.message }); 
-    }
+        const resQ = await pool.query(`SELECT r.*, u.username, u.tag, u.email, u.avatar_url FROM friend_requests r JOIN users u ON r.sender_id = u.id WHERE r.receiver_id = $1 AND r.status = 'pending'`, [req.user.id]);
+        res.json(resQ.rows.map(r => ({ ...r, sender: { id: r.sender_id, username: r.username, tag: r.tag, email: r.email, avatar_url: r.avatar_url } })));
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/users/unblock', authenticateToken, async (req, res) => {
-    const { userId } = req.body;
+app.post('/api/friend_requests', authenticateToken, async (req, res) => {
+    const { targetIdentifier } = req.body;
+    const lastHash = targetIdentifier.lastIndexOf('#');
+    if (lastHash === -1) return res.status(400).json({ error: "Format Nom#1234 requis" });
+    const username = targetIdentifier.substring(0, lastHash).trim();
+    const tag = targetIdentifier.substring(lastHash + 1).trim();
     try {
-        await pool.query('DELETE FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2', [req.user.id, userId]);
+        const uRes = await pool.query('SELECT id FROM users WHERE UPPER(username) = UPPER($1) AND tag = $2', [username, tag]);
+        const target = uRes.rows[0];
+        if (!target) return res.status(404).json({ error: "Introuvable" });
+        if (target.id === req.user.id) return res.status(400).json({ error: "Soi-même" });
+        const exist = await pool.query('SELECT * FROM friend_requests WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)', [req.user.id, target.id]);
+        if (exist.rows.length > 0) return res.status(400).json({ error: "Déjà existant" });
+        const newReq = await pool.query('INSERT INTO friend_requests (sender_id, receiver_id) VALUES ($1, $2) RETURNING *', [req.user.id, target.id]);
+        io.to(`user:${target.id}`).emit('friend_request', newReq.rows[0]);
         res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res) => {
+    const { status } = req.body; 
+    try {
+        const rRes = await pool.query('UPDATE friend_requests SET status = $1 WHERE id = $2 RETURNING *', [status, req.params.id]);
+        const reqData = rRes.rows[0];
+        if (status === 'accepted') {
+            const exist = await pool.query(`SELECT c.id FROM conversations c JOIN participants p1 ON c.id = p1.conversation_id JOIN participants p2 ON c.id = p2.conversation_id WHERE c.is_group = FALSE AND p1.user_id = $1 AND p2.user_id = $2`, [reqData.sender_id, reqData.receiver_id]);
+            let cid;
+            if (exist.rows.length > 0) {
+                cid = exist.rows[0].id;
+                await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [cid]);
+            } else {
+                const cRes = await pool.query('INSERT INTO conversations (is_group) VALUES (false) RETURNING id');
+                cid = cRes.rows[0].id;
+                await pool.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2), ($3, $2)', [reqData.sender_id, cid, reqData.receiver_id]);
+            }
+            await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [cid, reqData.receiver_id, '👋 Ami accepté !']);
+            io.to(`user:${reqData.sender_id}`).emit('conversation_added', { conversationId: cid });
+            io.to(`user:${reqData.receiver_id}`).emit('conversation_added', { conversationId: cid });
+            res.json({ success: true, conversationId: cid });
+        } else res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -598,17 +326,37 @@ app.delete('/api/friends/:friendId', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/contacts', authenticateToken, async (req, res) => {
+app.get('/api/conversations', authenticateToken, async (req, res) => {
     try {
-        const query = `SELECT DISTINCT ON (u.id) u.id, u.username, u.tag, u.email, u.is_online, u.avatar_url, fr.status AS friend_status, c.id AS conversation_id FROM friend_requests fr JOIN users u ON (CASE WHEN fr.sender_id = $1 THEN fr.receiver_id ELSE fr.sender_id END) = u.id LEFT JOIN participants p1 ON p1.user_id = fr.sender_id AND p1.conversation_id IN (SELECT p2.conversation_id FROM participants p2 WHERE p2.user_id = fr.receiver_id) LEFT JOIN conversations c ON c.id = p1.conversation_id AND c.is_group = FALSE WHERE (fr.sender_id = $1 OR fr.receiver_id = $1) AND fr.status = 'accepted' ORDER BY u.id`;
+        const query = `SELECT c.*, p.last_deleted_at, (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_content, (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_time, (SELECT deleted_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_deleted FROM conversations c JOIN participants p ON c.id = p.conversation_id WHERE p.user_id = $1 ORDER BY last_message_time DESC NULLS LAST`;
         const result = await pool.query(query, [req.user.id]);
-        let blockedIds = new Set();
+        
+        let blockedMap = new Set();
         try {
-            const blockedRes = await pool.query('SELECT blocked_id FROM blocked_users WHERE blocker_id = $1', [req.user.id]);
-            blockedIds = new Set(blockedRes.rows.map(r => r.blocked_id));
-        } catch (e) {}
-        const filtered = result.rows.filter(c => !blockedIds.has(c.id));
-        res.json(filtered);
+            const blocksRes = await pool.query('SELECT blocked_id, blocker_id FROM blocked_users WHERE blocker_id = $1 OR blocked_id = $1', [req.user.id]);
+            blocksRes.rows.forEach(r => { if (r.blocker_id === req.user.id) blockedMap.add(r.blocked_id); if (r.blocked_id === req.user.id) blockedMap.add(r.blocker_id); });
+        } catch(e) {}
+
+        const visible = result.rows.filter(row => {
+            if (!row.last_deleted_at) return true;
+            if (!row.last_message_time) return false;
+            return new Date(row.last_message_time) > new Date(row.last_deleted_at);
+        });
+
+        const enriched = await Promise.all(visible.map(async (row) => {
+            let displayName = row.name;
+            let displayAvatar = row.avatar_url;
+            if (!row.is_group) {
+                const otherPRes = await pool.query(`SELECT u.id, u.username, u.tag, u.avatar_url FROM participants p JOIN users u ON p.user_id = u.id WHERE p.conversation_id = $1 AND p.user_id != $2 ORDER BY (p.user_id = $2) ASC LIMIT 1`, [row.id, req.user.id]);
+                if (otherPRes.rows.length > 0) {
+                    const u = otherPRes.rows[0];
+                    if (blockedMap.has(u.id)) { displayName = "Utilisateur Evo"; displayAvatar = null; } 
+                    else { displayName = `${u.username}#${u.tag}`; displayAvatar = u.avatar_url; }
+                } else { displayName = "Discussion"; }
+            }
+            return { ...row, name: displayName || "Discussion", avatar_url: displayAvatar, last_message: row.last_message_deleted ? "🚫 Message supprimé" : (row.last_message_content || "Nouvelle discussion"), last_message_at: row.last_message_time || row.created_at };
+        }));
+        res.json(enriched);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -654,38 +402,6 @@ app.put('/api/conversations/:id', authenticateToken, upload.single('avatar'), as
         const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversationId]);
         pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId }));
         res.json(result.rows[0]);
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/conversations', authenticateToken, async (req, res) => {
-    try {
-        const query = `SELECT c.*, p.last_deleted_at, (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_content, (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_time, (SELECT deleted_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message_deleted FROM conversations c JOIN participants p ON c.id = p.conversation_id WHERE p.user_id = $1 ORDER BY last_message_time DESC NULLS LAST`;
-        const result = await pool.query(query, [req.user.id]);
-        const blockedMap = new Set();
-        try {
-            const blocksRes = await pool.query('SELECT blocked_id, blocker_id FROM blocked_users WHERE blocker_id = $1 OR blocked_id = $1', [req.user.id]);
-            blocksRes.rows.forEach(r => { if (r.blocker_id === req.user.id) blockedMap.add(r.blocked_id); if (r.blocked_id === req.user.id) blockedMap.add(r.blocker_id); });
-        } catch(e) {}
-
-        const visibleConversations = result.rows.filter(row => {
-            if (!row.last_deleted_at) return true;
-            if (!row.last_message_time) return false;
-            return new Date(row.last_message_time) > new Date(row.last_deleted_at);
-        });
-
-        const enriched = await Promise.all(visibleConversations.map(async (row) => {
-            let displayName = row.name;
-            let displayAvatar = row.avatar_url;
-            if (!row.is_group) {
-                const otherPRes = await pool.query(`SELECT u.id, u.username, u.tag, u.avatar_url FROM participants p JOIN users u ON p.user_id = u.id WHERE p.conversation_id = $1 AND p.user_id != $2 ORDER BY (p.user_id = $2) ASC LIMIT 1`, [row.id, req.user.id]);
-                if (otherPRes.rows.length > 0) {
-                    const u = otherPRes.rows[0];
-                    if (blockedMap.has(u.id)) { displayName = "Utilisateur Evo"; displayAvatar = null; } else { displayName = `${u.username}#${u.tag}`; displayAvatar = u.avatar_url; }
-                } else { displayName = "Discussion"; }
-            }
-            return { ...row, name: displayName || "Discussion", avatar_url: displayAvatar, last_message: row.last_message_deleted ? "🚫 Message supprimé" : (row.last_message_content || "Nouvelle discussion"), last_message_at: row.last_message_time || row.created_at };
-        }));
-        res.json(enriched);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -757,20 +473,6 @@ app.delete('/api/conversations/:id/leave', authenticateToken, async (req, res) =
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
-    try {
-        const messagesToReadRes = await pool.query(`SELECT m.id FROM messages m LEFT JOIN message_reads mr ON mr.message_id = m.id AND mr.user_id = $1 WHERE m.conversation_id = $2 AND m.sender_id != $1 AND mr.message_id IS NULL`, [req.user.id, req.params.id]);
-        const messageIds = messagesToReadRes.rows.map(row => row.id);
-        if (messageIds.length > 0) {
-            const readValues = [], readPlaceholders = [];
-            for (let i = 0; i < messageIds.length; i++) { readPlaceholders.push(`($${i * 2 + 1}, $${i * 2 + 2})`); readValues.push(messageIds[i], req.user.id); }
-            await pool.query(`INSERT INTO message_reads (message_id, user_id) VALUES ${readPlaceholders.join(', ')} ON CONFLICT DO NOTHING`, readValues);
-            io.to(req.params.id).emit('READ_RECEIPT_UPDATE', { conversationId: req.params.id, readerId: req.user.id });
-        }
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 app.get('/api/conversations/:id/other', authenticateToken, async (req, res) => {
     try {
         const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1 AND user_id != $2 LIMIT 1', [req.params.id, req.user.id]);
@@ -797,6 +499,75 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.post('/api/messages', authenticateToken, upload.single('media'), async (req, res) => {
+    const { conversation_id, replied_to_message_id } = req.body;
+    const senderId = req.user.id;
+    
+    let content = req.body.content;
+    if (!content || content === 'undefined' || content === 'null') content = '';
+    
+    let attachmentUrl = req.body.attachment_url || null;
+    let messageType = req.body.message_type || 'text';
+
+    if (req.file) {
+        try {
+            const uploadResult = await new Promise((resolve, reject) => {
+                const uploadStream = cloudinary.uploader.upload_stream(
+                    { folder: `chat-app/conversations/${conversation_id}`, resource_type: "auto" },
+                    (error, result) => { if (error) reject(error); else resolve(result); }
+                );
+                uploadStream.end(req.file.buffer);
+            });
+            attachmentUrl = uploadResult.secure_url;
+            if (messageType !== 'audio') messageType = 'image';
+        } catch (error) { return res.status(500).json({ error: "Échec upload média." }); }
+    }
+
+    if (!attachmentUrl && content.trim() === '') return res.status(400).json({ error: 'Message vide.' });
+
+    try {
+        const result = await pool.query(
+            'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id, message_type, attachment_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+            [conversation_id, senderId, content, replied_to_message_id || null, messageType, attachmentUrl] 
+        );
+        const msg = result.rows[0];
+
+        await pool.query('INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [msg.id, senderId]);
+        await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
+
+        const userRes = await pool.query('SELECT username, tag, avatar_url FROM users WHERE id = $1', [senderId]);
+        const sender = userRes.rows[0];
+        
+        let replyData = null;
+        if (msg.replied_to_message_id) {
+             const rRes = await pool.query(`SELECT m.content, u.username, u.tag FROM messages m LEFT JOIN users u ON m.sender_id = u.id WHERE m.id = $1`, [msg.replied_to_message_id]);
+             if (rRes.rows[0]) replyData = { id: msg.replied_to_message_id, content: rRes.rows[0].content, sender: `${rRes.rows[0].username}#${rRes.rows[0].tag}` };
+        }
+
+        const fullMsg = { 
+            id: msg.id,
+            conversation_id: msg.conversation_id,
+            sender_id: msg.sender_id,
+            content: msg.content === null ? "" : msg.content,
+            created_at: msg.created_at,
+            sender_username: `${sender.username}#${sender.tag}`, 
+            sender_avatar: sender.avatar_url,
+            read_count: 0, 
+            reply: replyData,
+            message_type: messageType,
+            attachment_url: attachmentUrl, 
+            image_url: attachmentUrl, 
+            reactions: []
+        }; 
+
+        io.to(conversation_id).emit('new_message', fullMsg);
+        const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversation_id]);
+        pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId: conversation_id }));
+        
+        res.json(fullMsg);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.put('/api/messages/:id', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('UPDATE messages SET content = $1, updated_at = NOW() WHERE id = $2 RETURNING *', [req.body.content, req.params.id]);
@@ -818,61 +589,131 @@ app.delete('/api/messages/:id', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/friend_requests', authenticateToken, async (req, res) => {
-    const { targetIdentifier } = req.body;
-    const lastHash = targetIdentifier.lastIndexOf('#');
-    if (lastHash === -1) return res.status(400).json({ error: "Format Nom#1234 requis" });
-    const username = targetIdentifier.substring(0, lastHash).trim();
-    const tag = targetIdentifier.substring(lastHash + 1).trim();
+app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
+    const messageId = req.params.id;
+    const userId = req.user.id;
+    const { emoji } = req.body; 
     try {
-        const uRes = await pool.query('SELECT id FROM users WHERE UPPER(username) = UPPER($1) AND tag = $2', [username, tag]);
-        const target = uRes.rows[0];
-        if (!target) return res.status(404).json({ error: "Introuvable" });
-        if (target.id === req.user.id) return res.status(400).json({ error: "Soi-même" });
-        try {
-            const blocked = await pool.query('SELECT 1 FROM blocked_users WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)', [req.user.id, target.id]);
-            if (blocked.rows.length > 0) return res.status(400).json({ error: "Impossible." });
-        } catch(e) {}
-        const exist = await pool.query('SELECT * FROM friend_requests WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)', [req.user.id, target.id]);
-        if (exist.rows.length > 0) return res.status(400).json({ error: "Déjà existant" });
-        const newReq = await pool.query('INSERT INTO friend_requests (sender_id, receiver_id) VALUES ($1, $2) RETURNING *', [req.user.id, target.id]);
-        io.to(`user:${target.id}`).emit('friend_request', newReq.rows[0]);
+        const msgCheck = await pool.query('SELECT conversation_id FROM messages WHERE id = $1', [messageId]);
+        if (msgCheck.rows.length === 0) return res.status(404).json({ error: "Message introuvable" });
+        const conversationId = msgCheck.rows[0].conversation_id;
+        
+        const existing = await pool.query('SELECT id FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [messageId, userId, emoji]);
+        if (existing.rows.length > 0) {
+            await pool.query('DELETE FROM message_reactions WHERE id = $1', [existing.rows[0].id]);
+        } else {
+            await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [messageId, userId, emoji]);
+        }
+        
+        const resReactions = await pool.query(`SELECT mr.emoji, mr.user_id, u.username FROM message_reactions mr JOIN users u ON mr.user_id = u.id WHERE mr.message_id = $1`, [messageId]);
+        io.to(conversationId).emit('message_reaction_update', { messageId, reactions: resReactions.rows });
+        res.json({ success: true, reactions: resReactions.rows });
+    } catch (err) { res.status(500).json({ error: "Erreur serveur" }); }
+});
+
+app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
+    try {
+        const messagesToReadRes = await pool.query(`SELECT m.id FROM messages m LEFT JOIN message_reads mr ON mr.message_id = m.id AND mr.user_id = $1 WHERE m.conversation_id = $2 AND m.sender_id != $1 AND mr.message_id IS NULL`, [req.user.id, req.params.id]);
+        const messageIds = messagesToReadRes.rows.map(row => row.id);
+        if (messageIds.length > 0) {
+            const readValues = [], readPlaceholders = [];
+            for (let i = 0; i < messageIds.length; i++) { readPlaceholders.push(`($${i * 2 + 1}, $${i * 2 + 2})`); readValues.push(messageIds[i], req.user.id); }
+            await pool.query(`INSERT INTO message_reads (message_id, user_id) VALUES ${readPlaceholders.join(', ')} ON CONFLICT DO NOTHING`, readValues);
+            io.to(req.params.id).emit('READ_RECEIPT_UPDATE', { conversationId: req.params.id, readerId: req.user.id });
+        }
         res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/friend_requests', authenticateToken, async (req, res) => {
+// EXTRAS
+app.get('/api/gifs/search', async (req, res) => {
+    const { q, pos } = req.query;
+    const apiKey = process.env.TENOR_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" });
     try {
-        const resQ = await pool.query(`SELECT r.*, u.username, u.tag, u.email, u.avatar_url FROM friend_requests r JOIN users u ON r.sender_id = u.id WHERE r.receiver_id = $1 AND r.status = 'pending'`, [req.user.id]);
-        res.json(resQ.rows.map(r => ({ ...r, sender: { id: r.sender_id, username: r.username, tag: r.tag, email: r.email, avatar_url: r.avatar_url } })));
+        let url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=${apiKey}&client_key=talkio&limit=20&media_filter=minimal`;
+        if (pos) url += `&pos=${pos}`;
+        const response = await fetch(url);
+        res.json(await response.json());
+    } catch (error) { res.status(500).json({ error: "Failed to fetch GIFs" }); }
+});
+
+app.get('/api/gifs/trending', async (req, res) => {
+    const { pos } = req.query;
+    const apiKey = process.env.TENOR_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" });
+    try {
+        let url = `https://tenor.googleapis.com/v2/featured?key=${apiKey}&client_key=talkio&limit=20&media_filter=minimal`;
+        if (pos) url += `&pos=${pos}`;
+        const response = await fetch(url);
+        res.json(await response.json());
+    } catch (error) { res.status(500).json({ error: "Failed to fetch GIFs" }); }
+});
+
+app.get('/api/stickers', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM stickers WHERE user_id IS NULL OR user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/friend_requests/:id/respond', authenticateToken, async (req, res) => {
-    const { status } = req.body; 
+app.post('/api/stickers', authenticateToken, upload.single('sticker'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "Aucun fichier" });
     try {
-        const rRes = await pool.query('UPDATE friend_requests SET status = $1 WHERE id = $2 RETURNING *', [status, req.params.id]);
-        const reqData = rRes.rows[0];
-        if (status === 'accepted') {
-            const exist = await pool.query(`SELECT c.id FROM conversations c JOIN participants p1 ON c.id = p1.conversation_id JOIN participants p2 ON c.id = p2.conversation_id WHERE c.is_group = FALSE AND p1.user_id = $1 AND p2.user_id = $2`, [reqData.sender_id, reqData.receiver_id]);
-            let cid;
-            if (exist.rows.length > 0) {
-                cid = exist.rows[0].id;
-                await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [cid]);
-            } else {
-                const cRes = await pool.query('INSERT INTO conversations (is_group) VALUES (false) RETURNING id');
-                cid = cRes.rows[0].id;
-                await pool.query('INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2), ($3, $2)', [reqData.sender_id, cid, reqData.receiver_id]);
-            }
-            await pool.query('INSERT INTO messages (conversation_id, sender_id, content) VALUES ($1, $2, $3)', [cid, reqData.receiver_id, '👋 Ami accepté !']);
-            io.to(`user:${reqData.sender_id}`).emit('conversation_added', { conversationId: cid });
-            io.to(`user:${reqData.receiver_id}`).emit('conversation_added', { conversationId: cid });
-            res.json({ success: true, conversationId: cid });
-        } else res.json({ success: true });
+        const uploadResult = await new Promise((resolve, reject) => {
+            const uploadStream = cloudinary.uploader.upload_stream({ folder: `chat-app/stickers/${req.user.id}`, resource_type: "image" }, (error, result) => { if (error) reject(error); else resolve(result); });
+            uploadStream.end(req.file.buffer);
+        });
+        const result = await pool.query('INSERT INTO stickers (url, user_id) VALUES ($1, $2) RETURNING *', [uploadResult.secure_url, req.user.id]);
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "Erreur upload" }); }
+});
+
+// USERS & BLOCKING (MUST BE LAST)
+app.get('/api/users/online', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id FROM users WHERE is_online = TRUE');
+        res.json(result.rows.map(u => u.id));
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
+app.get('/api/users/blocked', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query(`SELECT u.id, u.username, u.tag, u.avatar_url, b.created_at FROM blocked_users b JOIN users u ON b.blocked_id = u.id WHERE b.blocker_id = $1 ORDER BY b.created_at DESC`, [req.user.id]);
+        res.json(result.rows);
+    } catch (err) { 
+        if (err.code === '42P01') {
+             try { await pool.query(`CREATE TABLE IF NOT EXISTS blocked_users (id UUID PRIMARY KEY, blocker_id UUID REFERENCES users(id) ON DELETE CASCADE, blocked_id UUID REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(blocker_id, blocked_id))`); return res.json([]); } catch (e) { return res.status(500).json({ error: e.message }); }
+        }
+        res.status(500).json({ error: err.message }); 
+    }
+});
+
+// GENERIC ID ROUTE - MUST BE AT THE END
+app.get('/api/users/:id', authenticateToken, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, username, tag, email, is_online, avatar_url, theme_color FROM users WHERE id = $1', [req.params.id]);
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/users/block', authenticateToken, async (req, res) => {
+    const { userId } = req.body;
+    try {
+        const id = generateUUID();
+        await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/users/unblock', authenticateToken, async (req, res) => {
+    const { userId } = req.body;
+    try {
+        await pool.query('DELETE FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2', [req.user.id, userId]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.use((req, res) => { res.status(404).json({ error: "Route not found", path: req.url }); });
 
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

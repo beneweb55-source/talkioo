@@ -1,4 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
+<change>
+<file>components/Chat/ChatWindow.tsx</file>
+<description>Add Phone and Video call buttons to the chat header</description>
+<content><![CDATA[import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates, sendCallSignal } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
@@ -439,18 +442,22 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     } catch (err: any) { console.error("Erreur envoi:", err); setMessages(prev => prev.filter(m => m.id !== tempId)); setInputText(textToSend); if (fileToSend) { setSelectedFile(fileToSend); setImagePreview(currentPreview); } alert(err.message || "Erreur lors de l'envoi"); } finally { setIsSending(false); }
   };
 
+  // --- CALL HANDLER ---
   const handleCall = (type: 'audio' | 'video') => {
     if (isBlocked || isBlocking) {
         alert("Impossible d'appeler un contact bloqué.");
         return;
     }
     if (!conversation.is_group && otherUserId) {
+        // 1. Emit socket signal
         sendCallSignal('start', { 
             conversationId: conversation.id, 
             targetIds: [otherUserId], 
             type,
             caller: currentUser 
         });
+        
+        // 2. Trigger local Call UI via event (caught by App.tsx)
         const event = new CustomEvent('init_call', { 
             detail: { conversationId: conversation.id, targetUser: { id: otherUserId, username: headerName, avatar_url: headerAvatar }, type, isCaller: true } 
         });
@@ -592,4 +599,5 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         )}
     </div>
   );
-};
+};]]></content>
+</change>

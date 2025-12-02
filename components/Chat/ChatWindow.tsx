@@ -1,7 +1,4 @@
-<change>
-<file>components/Chat/ChatWindow.tsx</file>
-<description>Add Phone and Video call buttons to the chat header</description>
-<content><![CDATA[import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates, sendCallSignal } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
@@ -442,22 +439,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     } catch (err: any) { console.error("Erreur envoi:", err); setMessages(prev => prev.filter(m => m.id !== tempId)); setInputText(textToSend); if (fileToSend) { setSelectedFile(fileToSend); setImagePreview(currentPreview); } alert(err.message || "Erreur lors de l'envoi"); } finally { setIsSending(false); }
   };
 
-  // --- CALL HANDLER ---
   const handleCall = (type: 'audio' | 'video') => {
     if (isBlocked || isBlocking) {
         alert("Impossible d'appeler un contact bloqué.");
         return;
     }
     if (!conversation.is_group && otherUserId) {
-        // 1. Emit socket signal
         sendCallSignal('start', { 
             conversationId: conversation.id, 
             targetIds: [otherUserId], 
             type,
             caller: currentUser 
         });
-        
-        // 2. Trigger local Call UI via event (caught by App.tsx)
         const event = new CustomEvent('init_call', { 
             detail: { conversationId: conversation.id, targetUser: { id: otherUserId, username: headerName, avatar_url: headerAvatar }, type, isCaller: true } 
         });
@@ -501,25 +494,25 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 </div>
             ) : (
                 <>
-                    <div className="flex items-center gap-3">
-                        <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10"><ArrowLeft size={22} /></button>
-                        <div className={`flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity`} onClick={() => setIsDetailsOpen(true)}>
-                            <div className="relative">
+                    <div className="flex items-center gap-3 overflow-hidden flex-1 mr-2">
+                        <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10 flex-shrink-0"><ArrowLeft size={22} /></button>
+                        <div className={`flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity min-w-0`} onClick={() => setIsDetailsOpen(true)}>
+                            <div className="relative flex-shrink-0">
                                 <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
                                     {headerAvatar ? ( <img src={headerAvatar} alt={headerName} className="h-full w-full object-cover" /> ) : ( conversation.is_group ? <Users size={20} /> : headerName?.charAt(0).toUpperCase() )}
                                 </div>
                                 {isOnline && !conversation.is_group && !isBlocked && !isBlocking && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
                             </div>
-                            <div>
-                                <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight flex items-center gap-1">{headerName} {conversation.is_group && <Info size={12} className="text-gray-400"/>} {(isBlocked || isBlocking) && <Lock size={12} className="text-red-500"/>}</h2>
-                                <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">{(isBlocked || isBlocking) ? 'Conversation bloquée' : (conversation.is_group ? 'Cliquez pour gérer' : (isOnline ? 'En ligne' : 'Hors ligne'))}</p>
+                            <div className="min-w-0 flex-1">
+                                <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight flex items-center gap-1 truncate">{headerName} {conversation.is_group && <Info size={12} className="text-gray-400"/>} {(isBlocked || isBlocking) && <Lock size={12} className="text-red-500"/>}</h2>
+                                <p className="text-xs text-brand-600 dark:text-brand-400 font-medium truncate">{(isBlocked || isBlocking) ? 'Conversation bloquée' : (conversation.is_group ? 'Cliquez pour gérer' : (isOnline ? 'En ligne' : 'Hors ligne'))}</p>
                             </div>
                         </div>
                     </div>
-                    <div className="flex gap-3 text-brand-600 dark:text-brand-400">
-                        <button onClick={() => handleCall('audio')} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors"><Phone size={20} /></button>
-                        <button onClick={() => handleCall('video')} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors"><Video size={20} /></button>
-                        <button onClick={() => setIsSearchOpen(true)} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors"><Search size={20} /></button>
+                    <div className="flex gap-1 md:gap-2 flex-shrink-0 items-center">
+                        <button onClick={() => handleCall('audio')} className="p-2 md:p-2.5 text-gray-600 dark:text-gray-300 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors flex-shrink-0 flex items-center justify-center"><Phone size={20} /></button>
+                        <button onClick={() => handleCall('video')} className="p-2 md:p-2.5 text-gray-600 dark:text-gray-300 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors flex-shrink-0 flex items-center justify-center"><Video size={20} /></button>
+                        <button onClick={() => setIsSearchOpen(true)} className="p-2 md:p-2.5 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors flex-shrink-0 flex items-center justify-center"><Search size={20} /></button>
                     </div>
                 </>
             )}
@@ -599,5 +592,4 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         )}
     </div>
   );
-};]]></content>
-</change>
+};

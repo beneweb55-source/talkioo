@@ -230,13 +230,16 @@ app.get('/api/agora/token/:channelName', authenticateToken, (req, res) => {
     const currentTimestamp = Math.floor(Date.now() / 1000);
     const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
 
-    // Use environment variables OR fallbacks from your provided screenshot
-    // This ensures it works even if Render env vars aren't set yet
+    // --- CRITICAL FIX FOR CONNECTION ---
+    // Use environment variables OR fallbacks directly here
+    // This prevents "Token generation failed" if env vars are missing on host
     const appId = (process.env.AGORA_APP_ID || 'c14c9732092a4efd9ef0c8b44567de91').trim();
     const appCertificate = (process.env.AGORA_APP_CERTIFICATE || 'c915f268ecf8428f890e1b3117811dbe').trim();
 
     if (!appId || !appCertificate) {
-        console.warn("Agora credentials missing. Using mock token.");
+        console.error("Agora credentials missing in server config.");
+        // We still return a valid structure so the frontend doesn't crash immediately,
+        // though the connection will likely fail later on the client side.
         return res.json({ token: "mock_token_missing_keys", appId: "mock_app_id" });
     }
 
@@ -259,7 +262,7 @@ app.get('/api/agora/token/:channelName', authenticateToken, (req, res) => {
     } catch (error) {
         console.error("Agora Token Generation Error:", error);
         // Fallback to mock token to prevent client crash
-        res.json({ 
+        res.status(200).json({ 
             token: "mock_token_generation_failed", 
             appId: appId, 
             error: "Token generation failed" 

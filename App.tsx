@@ -4,15 +4,17 @@ import { AuthScreen } from './components/Auth/AuthScreen';
 import { ConversationList } from './components/Chat/ConversationList';
 import { ChatWindow } from './components/Chat/ChatWindow';
 import { UserProfile } from './components/User/UserProfile';
+import { CallInterface } from './components/Call/CallInterface';
 import { Conversation, FriendRequest, User } from './types';
 import { 
   getConversationsAPI, deleteConversationAPI, sendFriendRequestAPI, 
   getIncomingFriendRequestsAPI, respondToFriendRequestAPI, subscribeToFriendRequests, 
   subscribeToConversationsList, getContactsAPI, createGroupConversationAPI, 
-  getOnlineUsersAPI, subscribeToUserStatus, subscribeToUserProfileUpdates
+  getOnlineUsersAPI, subscribeToUserStatus, subscribeToUserProfileUpdates,
+  subscribeToCallEvents, sendCallSignal
 } from './services/api';
 import { usePushNotifications } from './hooks/usePushNotifications';
-import { MessageCircle, UserPlus, Bell, Search, Users, User as UserIcon, Moon, Sun, LogOut, Check, X, RefreshCw, Copy } from 'lucide-react';
+import { MessageCircle, UserPlus, Bell, Search, Users, User as UserIcon, Moon, Sun, LogOut, Check, X, RefreshCw, Copy, Phone, PhoneOff } from 'lucide-react';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -44,6 +46,10 @@ const Dashboard = () => {
   
   // Notification Modal State
   const [showNotificationModal, setShowNotificationModal] = useState(false);
+
+  // Call State
+  const [activeCall, setActiveCall] = useState<{ conversationId: string, targetUser?: User, type: 'audio' | 'video', isCaller: boolean } | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{ conversationId: string, caller: User, type: 'audio' | 'video' } | null>(null);
 
   // Forms State
   const [newChatTarget, setNewChatTarget] = useState('');
@@ -129,7 +135,29 @@ const Dashboard = () => {
         }
     });
 
-    // AUTO-RELOAD ON FOCUS (Fix desync issues)
+    // CALL EVENTS
+    const unsubCalls = subscribeToCallEvents(
+        (data) => { // onIncoming
+            if (activeCall) return; // Busy
+            setIncomingCall(data); // data: { conversationId, caller, type }
+        },
+        (data) => { // onAccepted
+            // Someone joined the call
+        },
+        (data) => { // onDeclined
+            alert("Appel rejeté ou occupé.");
+            setActiveCall(null);
+        }
+    );
+
+    // Listener for Outgoing Call Init (From ChatWindow via Event Dispatch)
+    const handleInitCall = (e: any) => {
+        const { conversationId, targetUser, type, isCaller } = e.detail;
+        setActiveCall({ conversationId, targetUser, type, isCaller });
+    };
+    window.addEventListener('init_call', handleInitCall);
+
+    // AUTO-RELOAD ON FOCUS
     const handleVisibilityChange = () => {
         if (document.visibilityState === 'visible') {
             console.log("App foregrounded: Refreshing data...");
@@ -137,20 +165,18 @@ const Dashboard = () => {
         }
     };
     
-    // Also trigger on window focus for desktop behavior
-    const handleWindowFocus = () => {
-        fetchData();
-    };
+    const handleWindowFocus = () => { fetchData(); };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleWindowFocus);
 
     return () => { 
-        unsubReq(); unsubConv(); unsubStatus(); unsubProfile(); 
+        unsubReq(); unsubConv(); unsubStatus(); unsubProfile(); unsubCalls();
         document.removeEventListener('visibilitychange', handleVisibilityChange);
         window.removeEventListener('focus', handleWindowFocus);
+        window.removeEventListener('init_call', handleInitCall);
     };
-  }, [user, token]);
+  }, [user, token, activeCall]);
 
   const handleCreateGroup = async (e: React.FormEvent) => {
       e.preventDefault();
@@ -161,11 +187,29 @@ const Dashboard = () => {
 
   const activeConversation = conversations.find(c => c.id === activeConversationId);
 
+  // Call Handlers
+  const handleAcceptCall = () => {
+    if (!incomingCall) return;
+    sendCallSignal('accept', { conversationId: incomingCall.conversationId, userId: user!.id });
+    setActiveCall({ 
+        conversationId: incomingCall.conversationId, 
+        targetUser: incomingCall.caller, 
+        type: incomingCall.type, 
+        isCaller: false 
+    });
+    setIncomingCall(null);
+  };
+
+  const handleRejectCall = () => {
+    if (!incomingCall) return;
+    sendCallSignal('reject', { conversationId: incomingCall.conversationId, userId: user!.id, targetId: incomingCall.caller.id });
+    setIncomingCall(null);
+  };
+
   // --- RENDER HELPERS ---
 
   const renderContactsView = () => (
       <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-20">
-          {/* Friend Requests Section */}
           {friendRequests.length > 0 && (
               <div className="mb-6">
                   <h3 className="text-xs font-bold text-gray-500 uppercase mb-3">Demandes en attente</h3>
@@ -191,7 +235,6 @@ const Dashboard = () => {
               </div>
           )}
 
-          {/* Contacts List */}
           <div>
               <div className="flex justify-between items-center mb-3">
                   <h3 className="text-xs font-bold text-gray-500 uppercase">Mes Contacts ({contacts.length})</h3>
@@ -243,6 +286,44 @@ const Dashboard = () => {
   return (
     <div className="flex h-[100dvh] w-full bg-white dark:bg-gray-950 overflow-hidden relative font-sans">
       
+      {/* --- INCOMING CALL MODAL --- */}
+      <AnimatePresence>
+         {incomingCall && (
+             <MotionDiv 
+                initial={{ y: -100, opacity: 0 }} 
+                animate={{ y: 0, opacity: 1 }} 
+                exit={{ y: -100, opacity: 0 }}
+                className="fixed top-4 left-0 right-0 mx-auto w-[90%] max-w-sm bg-white dark:bg-gray-800 rounded-2xl shadow-2xl z-[100] p-4 border-l-4 border-brand-500"
+             >
+                 <div className="flex items-center gap-4">
+                     <div className="h-12 w-12 rounded-full bg-gray-200 overflow-hidden">
+                         {incomingCall.caller.avatar_url && <img src={incomingCall.caller.avatar_url} className="w-full h-full object-cover"/>}
+                     </div>
+                     <div className="flex-1">
+                         <h3 className="font-bold dark:text-white">{incomingCall.caller.username}</h3>
+                         <p className="text-xs text-gray-500 animate-pulse">Appel {incomingCall.type === 'video' ? 'Vidéo' : 'Audio'} entrant...</p>
+                     </div>
+                     <div className="flex gap-2">
+                         <button onClick={handleRejectCall} className="p-3 bg-red-500 text-white rounded-full hover:bg-red-600"><PhoneOff size={20}/></button>
+                         <button onClick={handleAcceptCall} className="p-3 bg-green-500 text-white rounded-full hover:bg-green-600 animate-bounce"><Phone size={20}/></button>
+                     </div>
+                 </div>
+             </MotionDiv>
+         )}
+       </AnimatePresence>
+
+       {/* --- ACTIVE CALL INTERFACE --- */}
+       {activeCall && user && (
+           <CallInterface 
+               conversationId={activeCall.conversationId}
+               currentUser={user}
+               targetUser={activeCall.targetUser}
+               isCaller={activeCall.isCaller}
+               callType={activeCall.type}
+               onClose={() => setActiveCall(null)}
+           />
+       )}
+
       {/* --- MODALS --- */}
       <AnimatePresence>
         {(isFriendModalOpen || isGroupModalOpen) && (
@@ -431,7 +512,7 @@ const Dashboard = () => {
                     onDelete={async (id) => { await deleteConversationAPI(id, user!.id); fetchData(); if(activeConversationId === id) setActiveConversationId(null); }}
                     currentUser={user!}
                     onlineUsers={onlineUsers}
-                    searchTerm={searchTerm} // Pass search term
+                    searchTerm={searchTerm} 
                 />
             )
         )}
@@ -479,7 +560,7 @@ const Dashboard = () => {
       </div>
 
       {/* --- MAIN CHAT WINDOW (Desktop & Active Mobile) --- */}
-      <div className={`flex-1 flex flex-col bg-white dark:bg-gray-950 relative z-0 ${!activeConversationId ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`flex-1 flex flex-col bg-white dark:bg-gray-900 relative z-0 ${!activeConversationId ? 'hidden md:flex' : 'flex'}`}>
         {activeConversation ? (
             <ChatWindow 
                 conversation={activeConversation} 

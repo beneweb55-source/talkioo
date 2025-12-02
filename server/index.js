@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const crypto = require('crypto');
+const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
 
 // --- CONFIGURATION ---
 const app = express();
@@ -126,7 +127,7 @@ const initDB = async () => {
             );
         `);
 
-        // Migration pour le thème (si la colonne n'existe pas)
+        // Migration pour le thème
         await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_color TEXT DEFAULT '#f97316'`);
 
         console.log("Database initialized successfully");
@@ -138,6 +139,7 @@ const initDB = async () => {
 initDB();
 
 // --- MIDDLEWARE ---
+// Allow CORS from any origin to support mobile devices on local network
 app.use(cors({
     origin: true, 
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -164,6 +166,27 @@ io.on('connection', async (socket) => {
     }
     socket.on('join_room', (roomId) => socket.join(roomId));
     
+    // Call Signaling
+    socket.on('call_start', ({ conversationId, targetIds, type, caller }) => {
+        targetIds.forEach(targetId => {
+            io.to(`user:${targetId}`).emit('incoming_call', {
+                conversationId,
+                caller, 
+                type 
+            });
+        });
+    });
+
+    socket.on('call_accepted', ({ conversationId, userId }) => {
+        io.to(conversationId).emit('user_joined_call', { conversationId, userId });
+    });
+
+    socket.on('call_rejected', ({ conversationId, userId, targetId }) => {
+        if (targetId) {
+            io.to(`user:${targetId}`).emit('call_declined', { userId });
+        }
+    });
+
     socket.on('typing_start', ({ conversationId }) => {
         if(userId) socket.to(conversationId).emit('typing_update', { conversationId, userId, isTyping: true });
     });
@@ -197,6 +220,39 @@ const authenticateToken = (req, res, next) => {
 // --- ROUTES ---
 
 app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
+
+// --- AGORA TOKEN ROUTE ---
+app.get('/api/agora/token/:channelName', authenticateToken, (req, res) => {
+    const { channelName } = req.params;
+    const account = req.user.id; 
+    const role = RtcRole.PUBLISHER; 
+    const expirationTimeInSeconds = 3600;
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+    const appId = process.env.AGORA_APP_ID;
+    const appCertificate = process.env.AGORA_APP_CERTIFICATE;
+
+    if (!appId || !appCertificate) {
+        // Fallback for demo if env vars missing (NOT SECURE FOR PROD)
+        return res.status(500).json({ error: "Agora credentials missing on server" });
+    }
+
+    try {
+        const token = RtcTokenBuilder.buildTokenWithAccount(
+            appId,
+            appCertificate,
+            channelName,
+            account,
+            role,
+            privilegeExpiredTs
+        );
+        res.json({ token, appId });
+    } catch (error) {
+        console.error("Agora Token Error:", error);
+        res.status(500).json({ error: "Token generation failed" });
+    }
+});
 
 // --- AUTH ---
 app.post('/api/auth/register', async (req, res) => {
@@ -384,6 +440,9 @@ app.post('/api/conversations', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ... (Existing Routes for Conversations, Messages, Stickers, etc.) ...
+// Ensure they are below specific routes
+
 app.put('/api/conversations/:id', authenticateToken, upload.single('avatar'), async (req, res) => {
     const conversationId = req.params.id;
     const { name } = req.body;
@@ -502,13 +561,10 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req, res) =
 app.post('/api/messages', authenticateToken, upload.single('media'), async (req, res) => {
     const { conversation_id, replied_to_message_id } = req.body;
     const senderId = req.user.id;
-    
     let content = req.body.content;
     if (!content || content === 'undefined' || content === 'null') content = '';
-    
     let attachmentUrl = req.body.attachment_url || null;
     let messageType = req.body.message_type || 'text';
-
     if (req.file) {
         try {
             const uploadResult = await new Promise((resolve, reject) => {
@@ -522,48 +578,23 @@ app.post('/api/messages', authenticateToken, upload.single('media'), async (req,
             if (messageType !== 'audio') messageType = 'image';
         } catch (error) { return res.status(500).json({ error: "Échec upload média." }); }
     }
-
     if (!attachmentUrl && content.trim() === '') return res.status(400).json({ error: 'Message vide.' });
-
     try {
-        const result = await pool.query(
-            'INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id, message_type, attachment_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-            [conversation_id, senderId, content, replied_to_message_id || null, messageType, attachmentUrl] 
-        );
+        const result = await pool.query('INSERT INTO messages (conversation_id, sender_id, content, replied_to_message_id, message_type, attachment_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *', [conversation_id, senderId, content, replied_to_message_id || null, messageType, attachmentUrl]);
         const msg = result.rows[0];
-
         await pool.query('INSERT INTO message_reads (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [msg.id, senderId]);
         await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1', [conversation_id]);
-
         const userRes = await pool.query('SELECT username, tag, avatar_url FROM users WHERE id = $1', [senderId]);
         const sender = userRes.rows[0];
-        
         let replyData = null;
         if (msg.replied_to_message_id) {
              const rRes = await pool.query(`SELECT m.content, u.username, u.tag FROM messages m LEFT JOIN users u ON m.sender_id = u.id WHERE m.id = $1`, [msg.replied_to_message_id]);
              if (rRes.rows[0]) replyData = { id: msg.replied_to_message_id, content: rRes.rows[0].content, sender: `${rRes.rows[0].username}#${rRes.rows[0].tag}` };
         }
-
-        const fullMsg = { 
-            id: msg.id,
-            conversation_id: msg.conversation_id,
-            sender_id: msg.sender_id,
-            content: msg.content === null ? "" : msg.content,
-            created_at: msg.created_at,
-            sender_username: `${sender.username}#${sender.tag}`, 
-            sender_avatar: sender.avatar_url,
-            read_count: 0, 
-            reply: replyData,
-            message_type: messageType,
-            attachment_url: attachmentUrl, 
-            image_url: attachmentUrl, 
-            reactions: []
-        }; 
-
+        const fullMsg = { id: msg.id, conversation_id: msg.conversation_id, sender_id: msg.sender_id, content: msg.content === null ? "" : msg.content, created_at: msg.created_at, sender_username: `${sender.username}#${sender.tag}`, sender_avatar: sender.avatar_url, read_count: 0, reply: replyData, message_type: messageType, attachment_url: attachmentUrl, image_url: attachmentUrl, reactions: [] }; 
         io.to(conversation_id).emit('new_message', fullMsg);
         const pRes = await pool.query('SELECT user_id FROM participants WHERE conversation_id = $1', [conversation_id]);
         pRes.rows.forEach(r => io.to(`user:${r.user_id}`).emit('conversation_updated', { conversationId: conversation_id }));
-        
         res.json(fullMsg);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -597,14 +628,9 @@ app.post('/api/messages/:id/react', authenticateToken, async (req, res) => {
         const msgCheck = await pool.query('SELECT conversation_id FROM messages WHERE id = $1', [messageId]);
         if (msgCheck.rows.length === 0) return res.status(404).json({ error: "Message introuvable" });
         const conversationId = msgCheck.rows[0].conversation_id;
-        
         const existing = await pool.query('SELECT id FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3', [messageId, userId, emoji]);
-        if (existing.rows.length > 0) {
-            await pool.query('DELETE FROM message_reactions WHERE id = $1', [existing.rows[0].id]);
-        } else {
-            await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [messageId, userId, emoji]);
-        }
-        
+        if (existing.rows.length > 0) { await pool.query('DELETE FROM message_reactions WHERE id = $1', [existing.rows[0].id]); } 
+        else { await pool.query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [messageId, userId, emoji]); }
         const resReactions = await pool.query(`SELECT mr.emoji, mr.user_id, u.username FROM message_reactions mr JOIN users u ON mr.user_id = u.id WHERE mr.message_id = $1`, [messageId]);
         io.to(conversationId).emit('message_reaction_update', { messageId, reactions: resReactions.rows });
         res.json({ success: true, reactions: resReactions.rows });
@@ -625,94 +651,15 @@ app.post('/api/conversations/:id/read', authenticateToken, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// EXTRAS
-app.get('/api/gifs/search', async (req, res) => {
-    const { q, pos } = req.query;
-    const apiKey = process.env.TENOR_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" });
-    try {
-        let url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=${apiKey}&client_key=talkio&limit=20&media_filter=minimal`;
-        if (pos) url += `&pos=${pos}`;
-        const response = await fetch(url);
-        res.json(await response.json());
-    } catch (error) { res.status(500).json({ error: "Failed to fetch GIFs" }); }
-});
-
-app.get('/api/gifs/trending', async (req, res) => {
-    const { pos } = req.query;
-    const apiKey = process.env.TENOR_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" });
-    try {
-        let url = `https://tenor.googleapis.com/v2/featured?key=${apiKey}&client_key=talkio&limit=20&media_filter=minimal`;
-        if (pos) url += `&pos=${pos}`;
-        const response = await fetch(url);
-        res.json(await response.json());
-    } catch (error) { res.status(500).json({ error: "Failed to fetch GIFs" }); }
-});
-
-app.get('/api/stickers', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM stickers WHERE user_id IS NULL OR user_id = $1 ORDER BY created_at DESC', [req.user.id]);
-        res.json(result.rows);
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/stickers', authenticateToken, upload.single('sticker'), async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: "Aucun fichier" });
-    try {
-        const uploadResult = await new Promise((resolve, reject) => {
-            const uploadStream = cloudinary.uploader.upload_stream({ folder: `chat-app/stickers/${req.user.id}`, resource_type: "image" }, (error, result) => { if (error) reject(error); else resolve(result); });
-            uploadStream.end(req.file.buffer);
-        });
-        const result = await pool.query('INSERT INTO stickers (url, user_id) VALUES ($1, $2) RETURNING *', [uploadResult.secure_url, req.user.id]);
-        res.json(result.rows[0]);
-    } catch (err) { res.status(500).json({ error: "Erreur upload" }); }
-});
-
-// USERS & BLOCKING (MUST BE LAST)
-app.get('/api/users/online', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT id FROM users WHERE is_online = TRUE');
-        res.json(result.rows.map(u => u.id));
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/users/blocked', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query(`SELECT u.id, u.username, u.tag, u.avatar_url, b.created_at FROM blocked_users b JOIN users u ON b.blocked_id = u.id WHERE b.blocker_id = $1 ORDER BY b.created_at DESC`, [req.user.id]);
-        res.json(result.rows);
-    } catch (err) { 
-        if (err.code === '42P01') {
-             try { await pool.query(`CREATE TABLE IF NOT EXISTS blocked_users (id UUID PRIMARY KEY, blocker_id UUID REFERENCES users(id) ON DELETE CASCADE, blocked_id UUID REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(blocker_id, blocked_id))`); return res.json([]); } catch (e) { return res.status(500).json({ error: e.message }); }
-        }
-        res.status(500).json({ error: err.message }); 
-    }
-});
-
-// GENERIC ID ROUTE - MUST BE AT THE END
-app.get('/api/users/:id', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT id, username, tag, email, is_online, avatar_url, theme_color FROM users WHERE id = $1', [req.params.id]);
-        res.json(result.rows[0]);
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/users/block', authenticateToken, async (req, res) => {
-    const { userId } = req.body;
-    try {
-        const id = generateUUID();
-        await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/users/unblock', authenticateToken, async (req, res) => {
-    const { userId } = req.body;
-    try {
-        await pool.query('DELETE FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2', [req.user.id, userId]);
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
+app.get('/api/gifs/search', async (req, res) => { const { q, pos } = req.query; const apiKey = process.env.TENOR_API_KEY; if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" }); try { let url = `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=${apiKey}&client_key=talkio&limit=20&media_filter=minimal`; if (pos) url += `&pos=${pos}`; const response = await fetch(url); res.json(await response.json()); } catch (error) { res.status(500).json({ error: "Failed to fetch GIFs" }); } });
+app.get('/api/gifs/trending', async (req, res) => { const { pos } = req.query; const apiKey = process.env.TENOR_API_KEY; if (!apiKey) return res.status(500).json({ error: "Tenor API Key not configured" }); try { let url = `https://tenor.googleapis.com/v2/featured?key=${apiKey}&client_key=talkio&limit=20&media_filter=minimal`; if (pos) url += `&pos=${pos}`; const response = await fetch(url); res.json(await response.json()); } catch (error) { res.status(500).json({ error: "Failed to fetch GIFs" }); } });
+app.get('/api/stickers', authenticateToken, async (req, res) => { try { const result = await pool.query('SELECT * FROM stickers WHERE user_id IS NULL OR user_id = $1 ORDER BY created_at DESC', [req.user.id]); res.json(result.rows); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.post('/api/stickers', authenticateToken, upload.single('sticker'), async (req, res) => { if (!req.file) return res.status(400).json({ error: "Aucun fichier" }); try { const uploadResult = await new Promise((resolve, reject) => { const uploadStream = cloudinary.uploader.upload_stream({ folder: `chat-app/stickers/${req.user.id}`, resource_type: "image" }, (error, result) => { if (error) reject(error); else resolve(result); }); uploadStream.end(req.file.buffer); }); const result = await pool.query('INSERT INTO stickers (url, user_id) VALUES ($1, $2) RETURNING *', [uploadResult.secure_url, req.user.id]); res.json(result.rows[0]); } catch (err) { res.status(500).json({ error: "Erreur upload" }); } });
+app.get('/api/users/online', authenticateToken, async (req, res) => { try { const result = await pool.query('SELECT id FROM users WHERE is_online = TRUE'); res.json(result.rows.map(u => u.id)); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.get('/api/users/blocked', authenticateToken, async (req, res) => { try { const result = await pool.query(`SELECT u.id, u.username, u.tag, u.avatar_url, b.created_at FROM blocked_users b JOIN users u ON b.blocked_id = u.id WHERE b.blocker_id = $1 ORDER BY b.created_at DESC`, [req.user.id]); res.json(result.rows); } catch (err) { if (err.code === '42P01') { try { await pool.query(`CREATE TABLE IF NOT EXISTS blocked_users (id UUID PRIMARY KEY, blocker_id UUID REFERENCES users(id) ON DELETE CASCADE, blocked_id UUID REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(blocker_id, blocked_id))`); return res.json([]); } catch (e) { return res.status(500).json({ error: e.message }); } } res.status(500).json({ error: err.message }); } });
+app.get('/api/users/:id', authenticateToken, async (req, res) => { try { const result = await pool.query('SELECT id, username, tag, email, is_online, avatar_url, theme_color FROM users WHERE id = $1', [req.params.id]); res.json(result.rows[0]); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.post('/api/users/block', authenticateToken, async (req, res) => { const { userId } = req.body; try { const id = generateUUID(); await pool.query('INSERT INTO blocked_users (id, blocker_id, blocked_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [id, req.user.id, userId]); res.json({ success: true }); } catch (err) { res.status(500).json({ error: err.message }); } });
+app.post('/api/users/unblock', authenticateToken, async (req, res) => { const { userId } = req.body; try { await pool.query('DELETE FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2', [req.user.id, userId]); res.json({ success: true }); } catch (err) { res.status(500).json({ error: err.message }); } });
 
 app.use((req, res) => { res.status(404).json({ error: "Route not found", path: req.url }); });
 

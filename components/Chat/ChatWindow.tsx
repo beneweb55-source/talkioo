@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates } from '../../services/api';
+import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates, sendCallSignal } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
 import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus, Sticker as StickerIcon, Mic, Trash2, StopCircle, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -17,7 +17,7 @@ interface ChatWindowProps {
   currentUser: User;
   onBack?: () => void;
   onlineUsers: Set<string>;
-  contacts: User[]; // New prop for adding members
+  contacts: User[];
 }
 
 export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUser, onBack, onlineUsers, contacts }) => {
@@ -45,8 +45,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [showInputEmoji, setShowInputEmoji] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false); 
   const [showStickerPicker, setShowStickerPicker] = useState(false);
-  const [showMediaMenu, setShowMediaMenu] = useState(false); // Consolidated menu state
-  const [isDetailsOpen, setIsDetailsOpen] = useState(false); // Changed name from isGroupInfoOpen
+  const [showMediaMenu, setShowMediaMenu] = useState(false); 
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false); 
 
   // RECORDING STATE
   const [isRecording, setIsRecording] = useState(false);
@@ -73,7 +73,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   const [viewportHeight, setViewportHeight] = useState('100%');
 
   useEffect(() => {
-    // This handler ensures the container size matches the visible viewport (minus keyboard)
     const handleVisualViewportResize = () => {
         if (window.visualViewport) {
             setViewportHeight(`${window.visualViewport.height}px`);
@@ -84,7 +83,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', handleVisualViewportResize);
         window.visualViewport.addEventListener('scroll', handleVisualViewportResize);
-        // Set initial
         setViewportHeight(`${window.visualViewport.height}px`);
     }
 
@@ -95,7 +93,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }
     };
   }, []);
-  // -----------------------------
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
       requestAnimationFrame(() => {
@@ -205,12 +202,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
           setShowStickerPicker(false);
           setShowMediaMenu(false);
       }
-      
-      // Delay to allow keyboard animation
       setTimeout(() => scrollToBottom('auto'), 100);
       setTimeout(() => {
           scrollToBottom('auto');
-          // Ensure input is visible (safeguard)
           textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }, 400);
   };
@@ -229,9 +223,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                 setHeaderName(other.username === 'Utilisateur Talkio' ? 'Utilisateur Talkio' : `${other.username}#${other.tag}`);
                 setHeaderAvatar(other.avatar_url || null);
                 setOtherUserId(other.id);
-                // Set blocked status from API response
-                setIsBlocked(!!other.is_blocking_me); // They blocked me
-                setIsBlocking(!!other.is_blocked_by_me); // I blocked them
+                setIsBlocked(!!other.is_blocking_me); 
+                setIsBlocking(!!other.is_blocked_by_me); 
             } else {
                 setHeaderName('Inconnu');
                 setHeaderAvatar(null);
@@ -239,7 +232,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }
       };
       loadName();
-  }, [conversation, currentUser, isDetailsOpen]); // Reload when details modal closes (in case of unblock)
+  }, [conversation, currentUser, isDetailsOpen]);
 
   useEffect(() => {
     setLoading(true);
@@ -275,9 +268,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
             }
             return [...prev, newMessage];
         });
-        
         if (!isSearchOpen) scrollToBottom('smooth');
-        
         if (newMessage.sender_id !== currentUser.id) markMessagesAsReadAPI(conversation.id);
     });
 
@@ -300,10 +291,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
     const unsubscribeProfile = subscribeToUserProfileUpdates((updatedUser) => {
         if (otherUserId === updatedUser.id) {
-             // If I have blocked this user, the name should stay masked unless handled differently.
-             // But subscribeToUserProfileUpdates passes RAW user data.
-             // We'll rely on reloading the conversation or checking current block state.
-             // For now, update if not blocking.
              if (!isBlocking && !isBlocked) {
                 setHeaderName(`${updatedUser.username}#${updatedUser.tag}`);
                 setHeaderAvatar(updatedUser.avatar_url || null);
@@ -311,17 +298,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
         }
         setMessages(prev => prev.map(m => {
             if (m.sender_id === updatedUser.id) {
-                // Same logic, if blocked, maybe keep it clean, but for messages it's less critical than header
                 return { ...m, sender_username: `${updatedUser.username}#${updatedUser.tag}` };
             }
             return m;
         }));
     });
 
-    // REFRESH ON FOCUS
     const handleRefresh = async () => {
         if (document.visibilityState === 'visible') {
-            console.log("Chat focused: Refreshing messages...");
             try {
                 const msgs = await getMessagesAPI(conversation.id);
                 setMessages(msgs);
@@ -340,35 +324,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     };
   }, [conversation.id, currentUser.id, otherUserId]);
 
-  // -- AUDIO RECORDING LOGIC --
-
   const startRecording = async () => {
       try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           const recorder = new MediaRecorder(stream);
           audioChunksRef.current = [];
-
-          recorder.ondataavailable = (event) => {
-              if (event.data.size > 0) audioChunksRef.current.push(event.data);
-          };
-
-          recorder.onstop = () => {
-               // Logic handled in handleSendAudio or cancel
-          };
-
+          recorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunksRef.current.push(event.data); };
           recorder.start();
           mediaRecorderRef.current = recorder;
           setIsRecording(true);
           setRecordingDuration(0);
-          
-          recordingTimerRef.current = setInterval(() => {
-              setRecordingDuration(prev => prev + 1);
-          }, 1000);
-
-      } catch (err) {
-          console.error("Mic error:", err);
-          alert("Impossible d'accéder au micro.");
-      }
+          recordingTimerRef.current = setInterval(() => { setRecordingDuration(prev => prev + 1); }, 1000);
+      } catch (err) { console.error("Mic error:", err); alert("Impossible d'accéder au micro."); }
   };
 
   const stopRecording = () => {
@@ -377,34 +344,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
           mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
       }
       setIsRecording(false);
-      if (recordingTimerRef.current) {
-          clearInterval(recordingTimerRef.current);
-          recordingTimerRef.current = null;
-      }
+      if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
   };
 
-  const cancelRecording = () => {
-      stopRecording();
-      audioChunksRef.current = []; // Discard chunks
-  };
+  const cancelRecording = () => { stopRecording(); audioChunksRef.current = []; };
 
   const handleSendAudio = async () => {
       stopRecording();
-      // Wait a bit for onstop/ondataavailable to fire
       setTimeout(async () => {
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
           if (audioBlob.size === 0) return;
-          
           const audioFile = new File([audioBlob], "voice_message.webm", { type: 'audio/webm' });
-          
           setIsSending(true);
-          try {
-              await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'audio', audioFile);
-          } catch (err) {
-              console.error("Audio send failed", err);
-          } finally {
-              setIsSending(false);
-          }
+          try { await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'audio', audioFile); } catch (err) { console.error("Audio send failed", err); } finally { setIsSending(false); }
       }, 200);
   };
 
@@ -414,16 +366,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
       return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  // ---------------------------
-
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setInputText(e.target.value);
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       else sendTypingEvent(conversation.id);
-      typingTimeoutRef.current = setTimeout(() => {
-          sendStopTypingEvent(conversation.id);
-          typingTimeoutRef.current = null;
-      }, 2000);
+      typingTimeoutRef.current = setTimeout(() => { sendStopTypingEvent(conversation.id); typingTimeoutRef.current = null; }, 2000);
   };
 
   const onEmojiClick = (emojiData: EmojiClickData) => {
@@ -443,40 +390,23 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
 
   const handleGifSelect = async (gifUrl: string) => {
       setShowGifPicker(false);
-      try {
-          await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'gif', undefined, gifUrl);
-      } catch (err) { console.error("GIF send error", err); }
+      try { await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'gif', undefined, gifUrl); } catch (err) { console.error("GIF send error", err); }
   };
 
   const handleStickerSelect = async (stickerUrl: string) => {
       setShowStickerPicker(false);
-      try {
-          await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'sticker', undefined, stickerUrl);
-      } catch (err) { console.error("Sticker send error", err); }
+      try { await sendMessageAPI(conversation.id, currentUser.id, '', undefined, 'sticker', undefined, stickerUrl); } catch (err) { console.error("Sticker send error", err); }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleSendMessage(e);
-    }
-  };
+  const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); } };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
         const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-        if (!validTypes.includes(file.type)) {
-            alert("Format non supporté.");
-            e.target.value = ''; 
-            return;
-        }
+        if (!validTypes.includes(file.type)) { alert("Format non supporté."); e.target.value = ''; return; }
         const maxSize = 10 * 1024 * 1024; 
-        if (file.size > maxSize) {
-            alert("Image trop volumineuse. (Max 10Mo).");
-            e.target.value = ''; 
-            return;
-        }
+        if (file.size > maxSize) { alert("Image trop volumineuse. (Max 10Mo)."); e.target.value = ''; return; }
         const previewUrl = URL.createObjectURL(file);
         setSelectedFile(file);
         setImagePreview(previewUrl);
@@ -484,332 +414,135 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     }
   };
 
-  const cancelImage = () => {
-      setSelectedFile(null);
-      if (imagePreview) URL.revokeObjectURL(imagePreview);
-      setImagePreview(null);
-  };
+  const cancelImage = () => { setSelectedFile(null); if (imagePreview) URL.revokeObjectURL(imagePreview); setImagePreview(null); };
 
-  const handleReaction = async (msg: Message, emoji: string) => {
-      try { await reactToMessageAPI(msg.id, emoji); } 
-      catch (error) { console.error("Reaction failed", error); }
-  };
+  const handleReaction = async (msg: Message, emoji: string) => { try { await reactToMessageAPI(msg.id, emoji); } catch (error) { console.error("Reaction failed", error); } };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!inputText.trim() && !selectedFile) || isSending) return;
+    if (isBlocked || isBlocking) { alert("Impossible d'envoyer un message (Utilisateur bloqué)"); return; }
+    setIsSending(true);
+    setShowInputEmoji(false); setShowGifPicker(false); setShowStickerPicker(false); setShowMediaMenu(false);
+    if (typingTimeoutRef.current) { clearTimeout(typingTimeoutRef.current); typingTimeoutRef.current = null; sendStopTypingEvent(conversation.id); }
+    const textToSend = inputText; const fileToSend = selectedFile; const currentPreview = imagePreview; 
+    setInputText(''); setSelectedFile(null); setImagePreview(null); setReplyingTo(null);
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    const tempId = 'temp_' + Date.now();
+    const optimisticMsg: Message = { id: tempId, conversation_id: conversation.id, sender_id: currentUser.id, content: textToSend, created_at: new Date().toISOString(), sender_username: currentUser.username, message_type: fileToSend ? 'image' : 'text', attachment_url: currentPreview || undefined, read_count: 0 };
+    if (!editingMessage) { setMessages(prev => [...prev, optimisticMsg]); scrollToBottom('smooth'); }
+    try {
+        if (editingMessage && !fileToSend) { await editMessageAPI(editingMessage.id, textToSend); setEditingMessage(null); } 
+        else { const newMessage = await sendMessageAPI(conversation.id, currentUser.id, textToSend, replyingTo?.id, fileToSend ? 'image' : 'text', fileToSend || undefined);
+            setMessages(prev => { const alreadyExists = prev.find(m => m.id === newMessage.id); if (alreadyExists) { if (!alreadyExists.attachment_url && newMessage.attachment_url) { return prev.map(m => m.id === newMessage.id ? newMessage : m).filter(m => m.id !== tempId); } return prev.filter(m => m.id !== tempId); } return prev.map(m => m.id === tempId ? newMessage : m); });
+        }
+    } catch (err: any) { console.error("Erreur envoi:", err); setMessages(prev => prev.filter(m => m.id !== tempId)); setInputText(textToSend); if (fileToSend) { setSelectedFile(fileToSend); setImagePreview(currentPreview); } alert(err.message || "Erreur lors de l'envoi"); } finally { setIsSending(false); }
+  };
+
+  const handleCall = (type: 'audio' | 'video') => {
     if (isBlocked || isBlocking) {
-        alert("Impossible d'envoyer un message (Utilisateur bloqué)");
+        alert("Impossible d'appeler un contact bloqué.");
         return;
     }
-    
-    setIsSending(true);
-    setShowInputEmoji(false);
-    setShowGifPicker(false);
-    setShowStickerPicker(false);
-    setShowMediaMenu(false);
-    
-    if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-        typingTimeoutRef.current = null;
-        sendStopTypingEvent(conversation.id);
-    }
-
-    const textToSend = inputText;
-    const fileToSend = selectedFile; 
-    const currentPreview = imagePreview; 
-
-    setInputText('');
-    setSelectedFile(null);
-    setImagePreview(null);
-    setReplyingTo(null);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-
-    const tempId = 'temp_' + Date.now();
-    const optimisticMsg: Message = {
-        id: tempId,
-        conversation_id: conversation.id,
-        sender_id: currentUser.id,
-        content: textToSend,
-        created_at: new Date().toISOString(),
-        sender_username: currentUser.username,
-        message_type: fileToSend ? 'image' : 'text',
-        attachment_url: currentPreview || undefined, 
-        read_count: 0
-    };
-
-    if (!editingMessage) {
-        setMessages(prev => [...prev, optimisticMsg]);
-        scrollToBottom('smooth');
-    }
-
-    try {
-        if (editingMessage && !fileToSend) {
-            await editMessageAPI(editingMessage.id, textToSend);
-            setEditingMessage(null);
-        } else {
-            const newMessage = await sendMessageAPI(
-                conversation.id, 
-                currentUser.id, 
-                textToSend, 
-                replyingTo?.id, 
-                fileToSend ? 'image' : 'text',
-                fileToSend || undefined
-            );
-
-            setMessages(prev => {
-                const alreadyExists = prev.find(m => m.id === newMessage.id);
-                if (alreadyExists) {
-                    if (!alreadyExists.attachment_url && newMessage.attachment_url) {
-                         return prev.map(m => m.id === newMessage.id ? newMessage : m).filter(m => m.id !== tempId);
-                    }
-                    return prev.filter(m => m.id !== tempId);
-                }
-                return prev.map(m => m.id === tempId ? newMessage : m);
-            });
-        }
-    } catch (err: any) {
-        console.error("Erreur envoi:", err);
-        setMessages(prev => prev.filter(m => m.id !== tempId));
-        setInputText(textToSend);
-        if (fileToSend) {
-            setSelectedFile(fileToSend);
-            setImagePreview(currentPreview);
-        }
-        alert(err.message || "Erreur lors de l'envoi");
-    } finally {
-        setIsSending(false);
+    if (!conversation.is_group && otherUserId) {
+        sendCallSignal('start', { 
+            conversationId: conversation.id, 
+            targetIds: [otherUserId], 
+            type,
+            caller: currentUser 
+        });
+        const event = new CustomEvent('init_call', { 
+            detail: { conversationId: conversation.id, targetUser: { id: otherUserId, username: headerName, avatar_url: headerAvatar }, type, isCaller: true } 
+        });
+        window.dispatchEvent(event);
+    } else {
+        alert("Appels de groupe bientôt disponibles !");
     }
   };
 
   const isOnline = otherUserId && onlineUsers.has(otherUserId);
   const canSend = (inputText.trim().length > 0 || selectedFile !== null) && !isSending && !isBlocked && !isBlocking;
-  // Show Mic if input is empty and no file selected
   const showMic = !inputText.trim() && !selectedFile && !isSending && !isRecording && !isBlocked && !isBlocking;
 
   return (
-    <div 
-        className="flex flex-col relative bg-[#e5ddd5] dark:bg-[#0b141a]"
-        style={{ height: viewportHeight }}
-    >
-        <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" 
-             style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
-
-        {/* --- CONVERSATION DETAILS / GROUP MANAGER OVERLAY --- */}
+    <div className="flex flex-col relative bg-[#e5ddd5] dark:bg-[#0b141a]" style={{ height: viewportHeight }}>
+        <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
         <AnimatePresence>
             {isDetailsOpen && (
                 <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-                    <GroupManager 
-                        conversation={conversation}
-                        currentUser={currentUser}
-                        contacts={contacts}
-                        onClose={() => setIsDetailsOpen(false)}
-                        onUpdate={() => {}}
-                    />
+                    <GroupManager conversation={conversation} currentUser={currentUser} contacts={contacts} onClose={() => setIsDetailsOpen(false)} onUpdate={() => {}} />
                 </div>
             )}
         </AnimatePresence>
-
         <div className="h-[70px] bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-gray-800/50 flex items-center justify-between px-4 z-20 shadow-sm flex-shrink-0">
             {isSearchOpen ? (
                 <div className="flex-1 flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
                     <div className="flex-1 relative">
-                        <input 
-                            ref={searchInputRef}
-                            type="text" 
-                            placeholder="Rechercher..." 
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full bg-gray-100 dark:bg-gray-800 border-none rounded-xl py-2 pl-4 pr-12 focus:ring-2 focus:ring-brand-500/20 text-sm outline-none dark:text-white"
-                        />
+                        <input ref={searchInputRef} type="text" placeholder="Rechercher..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-gray-100 dark:bg-gray-800 border-none rounded-xl py-2 pl-4 pr-12 focus:ring-2 focus:ring-brand-500/20 text-sm outline-none dark:text-white" />
                         {searchMatches.length > 0 && (
                              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                                <span className="text-xs text-gray-400 mr-1">
-                                    {currentMatchIndex + 1}/{searchMatches.length}
-                                </span>
+                                <span className="text-xs text-gray-400 mr-1">{currentMatchIndex + 1}/{searchMatches.length}</span>
                                 <div className="flex bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden">
-                                    <button onClick={handlePrevMatch} className="p-1 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300">
-                                        <ChevronUp size={14} />
-                                    </button>
+                                    <button onClick={handlePrevMatch} className="p-1 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300"><ChevronUp size={14} /></button>
                                     <div className="w-[1px] bg-gray-300 dark:bg-gray-600"></div>
-                                    <button onClick={handleNextMatch} className="p-1 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300">
-                                        <ChevronDown size={14} />
-                                    </button>
+                                    <button onClick={handleNextMatch} className="p-1 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300"><ChevronDown size={14} /></button>
                                 </div>
                              </div>
                         )}
                     </div>
-                    <button onClick={() => setIsSearchOpen(false)} className="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full">
-                        <X size={20} />
-                    </button>
+                    <button onClick={() => setIsSearchOpen(false)} className="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full"><X size={20} /></button>
                 </div>
             ) : (
                 <>
                     <div className="flex items-center gap-3">
-                        <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10">
-                            <ArrowLeft size={22} />
-                        </button>
-                        
-                        {/* Header Info - Clickable for details (Group or 1:1) */}
-                        <div 
-                            className={`flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity`}
-                            onClick={() => setIsDetailsOpen(true)}
-                        >
+                        <button onClick={onBack} className="md:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300 rounded-full hover:bg-black/5 dark:hover:bg-white/10"><ArrowLeft size={22} /></button>
+                        <div className={`flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity`} onClick={() => setIsDetailsOpen(true)}>
                             <div className="relative">
                                 <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold shadow-md overflow-hidden">
-                                    {headerAvatar ? (
-                                        <img src={headerAvatar} alt={headerName} className="h-full w-full object-cover" />
-                                    ) : (
-                                        conversation.is_group ? <Users size={20} /> : headerName?.charAt(0).toUpperCase()
-                                    )}
+                                    {headerAvatar ? ( <img src={headerAvatar} alt={headerName} className="h-full w-full object-cover" /> ) : ( conversation.is_group ? <Users size={20} /> : headerName?.charAt(0).toUpperCase() )}
                                 </div>
                                 {isOnline && !conversation.is_group && !isBlocked && !isBlocking && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-900 rounded-full"></span>}
                             </div>
                             <div>
-                                <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight flex items-center gap-1">
-                                    {headerName}
-                                    {conversation.is_group && <Info size={12} className="text-gray-400"/>}
-                                    {(isBlocked || isBlocking) && <Lock size={12} className="text-red-500"/>}
-                                </h2>
-                                <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">
-                                    {(isBlocked || isBlocking) ? 'Conversation bloquée' : (conversation.is_group ? 'Cliquez pour gérer' : (isOnline ? 'En ligne' : 'Hors ligne'))}
-                                </p>
+                                <h2 className="text-gray-900 dark:text-white font-bold text-sm leading-tight flex items-center gap-1">{headerName} {conversation.is_group && <Info size={12} className="text-gray-400"/>} {(isBlocked || isBlocking) && <Lock size={12} className="text-red-500"/>}</h2>
+                                <p className="text-xs text-brand-600 dark:text-brand-400 font-medium">{(isBlocked || isBlocking) ? 'Conversation bloquée' : (conversation.is_group ? 'Cliquez pour gérer' : (isOnline ? 'En ligne' : 'Hors ligne'))}</p>
                             </div>
                         </div>
                     </div>
-                    <div className="flex gap-1 text-brand-600 dark:text-brand-400">
-                        <button onClick={() => setIsSearchOpen(true)} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors">
-                            <Search size={20} />
-                        </button>
+                    <div className="flex gap-3 text-brand-600 dark:text-brand-400">
+                        <button onClick={() => handleCall('audio')} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors"><Phone size={20} /></button>
+                        <button onClick={() => handleCall('video')} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors"><Video size={20} /></button>
+                        <button onClick={() => setIsSearchOpen(true)} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors"><Search size={20} /></button>
                     </div>
                 </>
             )}
         </div>
-
         <div className="flex-1 overflow-y-auto p-4 space-y-2 z-10 no-scrollbar relative">
-            {loading ? (
-                <div className="flex justify-center mt-10"><Loader2 className="animate-spin text-brand-500" size={32} /></div>
-            ) : (
-                <>
-                    {messages.map(msg => (
-                        <MessageBubble 
-                            key={msg.id} 
-                            message={msg} 
-                            isOwn={msg.sender_id === currentUser.id}
-                            onEdit={(m) => { setEditingMessage(m); setInputText(m.content); setReplyingTo(null); cancelImage(); }}
-                            onDelete={async (m) => { if(window.confirm('Supprimer ?')) await deleteMessageAPI(m.id); }}
-                            onReply={(m) => { setReplyingTo(m); setEditingMessage(null); textareaRef.current?.focus(); }}
-                            onReact={handleReaction}
-                            highlightTerm={searchQuery}
-                        />
-                    ))}
-                    {(isBlocked || isBlocking) && (
-                        <div className="flex justify-center my-4">
-                            <div className="bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs py-2 px-4 rounded-full flex items-center gap-2">
-                                <Lock size={12}/> Vous ne pouvez plus envoyer de messages dans cette conversation.
-                            </div>
-                        </div>
-                    )}
-                </>
-            )}
-            <AnimatePresence>
-            {typingUsers.size > 0 && (
-                <MotionDiv initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex justify-start">
-                    <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-2xl rounded-tl-sm shadow-sm flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce"></span>
-                        <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce delay-100"></span>
-                        <span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce delay-200"></span>
-                    </div>
-                </MotionDiv>
-            )}
-            </AnimatePresence>
+            {loading ? ( <div className="flex justify-center mt-10"><Loader2 className="animate-spin text-brand-500" size={32} /></div> ) : ( <> {messages.map(msg => ( <MessageBubble key={msg.id} message={msg} isOwn={msg.sender_id === currentUser.id} onEdit={(m) => { setEditingMessage(m); setInputText(m.content); setReplyingTo(null); cancelImage(); }} onDelete={async (m) => { if(window.confirm('Supprimer ?')) await deleteMessageAPI(m.id); }} onReply={(m) => { setReplyingTo(m); setEditingMessage(null); textareaRef.current?.focus(); }} onReact={handleReaction} highlightTerm={searchQuery} /> ))} {(isBlocked || isBlocking) && ( <div className="flex justify-center my-4"> <div className="bg-gray-200 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-xs py-2 px-4 rounded-full flex items-center gap-2"> <Lock size={12}/> Vous ne pouvez plus envoyer de messages dans cette conversation. </div> </div> )} </> )}
+            <AnimatePresence>{typingUsers.size > 0 && (<MotionDiv initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex justify-start"><div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-2xl rounded-tl-sm shadow-sm flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce"></span><span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce delay-100"></span><span className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-bounce delay-200"></span></div></MotionDiv>)}</AnimatePresence>
             <div ref={messagesEndRef} />
         </div>
-
-        {/* Input Area - Hidden if blocked */}
         {!isBlocked && !isBlocking && (
             <div className="p-2 z-20 bg-transparent flex-shrink-0 relative">
                 <AnimatePresence>
-                    {showInputEmoji && (
-                        <MotionDiv 
-                            ref={emojiPickerRef}
-                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                            className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
-                            style={{ width: 'min(350px, 90vw)' }}
-                        >
-                            <EmojiPicker 
-                                theme={Theme.AUTO}
-                                onEmojiClick={onEmojiClick}
-                                searchPlaceHolder="Rechercher..."
-                                width="100%"
-                                height={400}
-                            />
-                        </MotionDiv>
-                    )}
-                    {showGifPicker && (
-                        <MotionDiv 
-                            ref={gifPickerRef}
-                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                            className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
-                            style={{ width: 'min(350px, 90vw)', height: '400px' }}
-                        >
-                            <GifPicker onSelect={handleGifSelect} />
-                        </MotionDiv>
-                    )}
-                    {showStickerPicker && (
-                        <MotionDiv 
-                            ref={stickerPickerRef}
-                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                            className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
-                            style={{ width: 'min(350px, 90vw)', height: '400px' }}
-                        >
-                            <StickerPicker onSelect={handleStickerSelect} />
-                        </MotionDiv>
-                    )}
+                    {showInputEmoji && (<MotionDiv ref={emojiPickerRef} initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.95 }} className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800" style={{ width: 'min(350px, 90vw)' }}><EmojiPicker theme={Theme.AUTO} onEmojiClick={onEmojiClick} searchPlaceHolder="Rechercher..." width="100%" height={400} /></MotionDiv>)}
+                    {showGifPicker && (<MotionDiv ref={gifPickerRef} initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.95 }} className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800" style={{ width: 'min(350px, 90vw)', height: '400px' }}><GifPicker onSelect={handleGifSelect} /></MotionDiv>)}
+                    {showStickerPicker && (<MotionDiv ref={stickerPickerRef} initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.95 }} className="absolute bottom-full mb-2 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800" style={{ width: 'min(350px, 90vw)', height: '400px' }}><StickerPicker onSelect={handleStickerSelect} /></MotionDiv>)}
                 </AnimatePresence>
-
                 <AnimatePresence>
                     {(editingMessage || replyingTo || imagePreview) && (
-                        <MotionDiv 
-                            initial={{ height: 0, opacity: 0, marginBottom: 0 }} 
-                            animate={{ height: 'auto', opacity: 1, marginBottom: 8 }} 
-                            exit={{ height: 0, opacity: 0, marginBottom: 0 }}
-                            className="mx-2 px-4 py-2 border-l-4 border-brand-500 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-r-lg shadow-sm flex justify-between items-center overflow-hidden"
-                        >
+                        <MotionDiv initial={{ height: 0, opacity: 0, marginBottom: 0 }} animate={{ height: 'auto', opacity: 1, marginBottom: 8 }} exit={{ height: 0, opacity: 0, marginBottom: 0 }} className="mx-2 px-4 py-2 border-l-4 border-brand-500 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-r-lg shadow-sm flex justify-between items-center overflow-hidden">
                             <div className="flex items-center gap-3 overflow-hidden">
-                                {imagePreview && (
-                                    <div className="h-12 w-12 rounded-lg bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0 relative">
-                                        <img src={imagePreview} alt="Preview" className="h-full w-full object-cover" />
-                                    </div>
-                                )}
+                                {imagePreview && (<div className="h-12 w-12 rounded-lg bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0 relative"><img src={imagePreview} alt="Preview" className="h-full w-full object-cover" /></div>)}
                                 <div className="text-xs overflow-hidden">
-                                    {imagePreview ? (
-                                        <span className="font-bold text-brand-600 flex items-center gap-1">
-                                            <Image size={12}/> Image sélectionnée
-                                        </span>
-                                    ) : (
-                                        <span className={`font-bold flex items-center gap-1 mb-0.5 ${editingMessage ? 'text-brand-600' : 'text-blue-500'}`}>
-                                            {editingMessage ? <><Pencil size={10}/> Modification</> : <><Reply size={10}/> Réponse à {replyingTo?.sender_username}</>}
-                                        </span>
-                                    )}
-                                    <div className="text-gray-600 dark:text-gray-300 truncate max-w-[200px]">
-                                        {imagePreview ? "Prêt à envoyer..." : (editingMessage?.content || replyingTo?.content)}
-                                    </div>
+                                    {imagePreview ? (<span className="font-bold text-brand-600 flex items-center gap-1"><Image size={12}/> Image sélectionnée</span>) : (<span className={`font-bold flex items-center gap-1 mb-0.5 ${editingMessage ? 'text-brand-600' : 'text-blue-500'}`}>{editingMessage ? <><Pencil size={10}/> Modification</> : <><Reply size={10}/> Réponse à {replyingTo?.sender_username}</>}</span>)}
+                                    <div className="text-gray-600 dark:text-gray-300 truncate max-w-[200px]">{imagePreview ? "Prêt à envoyer..." : (editingMessage?.content || replyingTo?.content)}</div>
                                 </div>
                             </div>
-                            <button onClick={() => { setEditingMessage(null); setReplyingTo(null); setInputText(''); cancelImage(); }} className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors">
-                                <X size={14} className="text-gray-500" />
-                            </button>
+                            <button onClick={() => { setEditingMessage(null); setReplyingTo(null); setInputText(''); cancelImage(); }} className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors"><X size={14} className="text-gray-500" /></button>
                         </MotionDiv>
                     )}
                 </AnimatePresence>
-
                 <div className="flex items-end gap-2 px-2 pb-2">
                     {isRecording ? (
                         <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-red-500/30 flex items-center px-4 h-[50px] animate-pulse">
@@ -820,87 +553,34 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                     ) : (
                         <>
                             <div className="flex-shrink-0 mb-1 flex gap-2 items-center">
-                                {/* Emoji Button */}
-                                <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowStickerPicker(false); setShowMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}>
-                                    <Smile size={24} />
-                                </button>
-                                
-                                {/* Unified Plus Button (Desktop & Mobile) */}
+                                <button onClick={() => { setShowInputEmoji(!showInputEmoji); setShowGifPicker(false); setShowStickerPicker(false); setShowMediaMenu(false); }} className={`emoji-toggle-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors shadow-sm ${showInputEmoji ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}><Smile size={24} /></button>
                                 <div className="relative">
-                                    <button 
-                                        className={`plus-menu-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-all shadow-sm ${showMediaMenu ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30 rotate-45' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`}
-                                        onClick={() => { setShowMediaMenu(!showMediaMenu); setShowInputEmoji(false); }}
-                                    >
-                                        <Plus size={24} />
-                                    </button>
+                                    <button className={`plus-menu-btn h-10 w-10 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-all shadow-sm ${showMediaMenu ? 'bg-brand-100 text-brand-600 dark:bg-brand-900/30 rotate-45' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'}`} onClick={() => { setShowMediaMenu(!showMediaMenu); setShowInputEmoji(false); }}><Plus size={24} /></button>
                                     <AnimatePresence>
                                         {showMediaMenu && (
-                                            <MotionDiv 
-                                                ref={mediaMenuRef}
-                                                initial={{ opacity: 0, scale: 0.9, y: 10 }}
-                                                animate={{ opacity: 1, scale: 1, y: -8 }}
-                                                exit={{ opacity: 0, scale: 0.9, y: 10 }}
-                                                className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-900 shadow-xl rounded-xl border border-gray-100 dark:border-gray-800 p-2 flex flex-col gap-2 min-w-[150px] z-50 backdrop-blur-md"
-                                            >
-                                                <button 
-                                                    onClick={() => { setShowMediaMenu(false); setShowGifPicker(true); }} 
-                                                    className="media-menu-item flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                                >
-                                                    <div className="p-1.5 bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 rounded-lg"><StickyNote size={18}/></div>
-                                                    GIF
-                                                </button>
-                                                <button 
-                                                    onClick={() => { setShowMediaMenu(false); setShowStickerPicker(true); }} 
-                                                    className="media-menu-item flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                                >
-                                                    <div className="p-1.5 bg-orange-100 dark:bg-orange-900/40 text-orange-600 dark:text-orange-400 rounded-lg"><StickerIcon size={18}/></div>
-                                                    Sticker
-                                                </button>
-                                                <button 
-                                                    onClick={() => { setShowMediaMenu(false); fileInputRef.current?.click(); }} 
-                                                    className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"
-                                                >
-                                                    <div className="p-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-lg"><Image size={18}/></div>
-                                                    Galerie
-                                                </button>
+                                            <MotionDiv ref={mediaMenuRef} initial={{ opacity: 0, scale: 0.9, y: 10 }} animate={{ opacity: 1, scale: 1, y: -8 }} exit={{ opacity: 0, scale: 0.9, y: 10 }} className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-900 shadow-xl rounded-xl border border-gray-100 dark:border-gray-800 p-2 flex flex-col gap-2 min-w-[150px] z-50 backdrop-blur-md">
+                                                <button onClick={() => { setShowMediaMenu(false); setShowGifPicker(true); }} className="media-menu-item flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"><div className="p-1.5 bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 rounded-lg"><StickyNote size={18}/></div> GIF</button>
+                                                <button onClick={() => { setShowMediaMenu(false); setShowStickerPicker(true); }} className="media-menu-item flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"><div className="p-1.5 bg-orange-100 dark:bg-orange-900/40 text-orange-600 dark:text-orange-400 rounded-lg"><StickerIcon size={18}/></div> Sticker</button>
+                                                <button onClick={() => { setShowMediaMenu(false); fileInputRef.current?.click(); }} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-medium transition-colors text-gray-700 dark:text-gray-200"><div className="p-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-lg"><Image size={18}/></div> Galerie</button>
                                             </MotionDiv>
                                         )}
                                     </AnimatePresence>
                                 </div>
-
                                 <input type="file" ref={fileInputRef} className="hidden" accept="image/jpeg,image/png,image/gif,image/webp" onChange={handleImageSelect} />
                             </div>
-
                             <div className="flex-1 bg-white dark:bg-gray-900 rounded-[24px] shadow-sm border border-gray-200 dark:border-gray-800 flex items-end overflow-hidden min-h-[50px]">
-                                <textarea
-                                    ref={textareaRef}
-                                    value={inputText}
-                                    onChange={handleInputChange}
-                                    onKeyDown={handleKeyDown}
-                                    onFocus={handleInputFocus}
-                                    rows={1}
-                                    placeholder={selectedFile ? "Ajouter une légende..." : "Écrivez votre message..."}
-                                    className="w-full bg-transparent border-none outline-none text-gray-800 dark:text-white px-4 py-3.5 placeholder-gray-400 resize-none max-h-[120px] overflow-y-auto leading-relaxed scrollbar-hide"
-                                    style={{ minHeight: '50px' }}
-                                />
+                                <textarea ref={textareaRef} value={inputText} onChange={handleInputChange} onKeyDown={handleKeyDown} onFocus={handleInputFocus} rows={1} placeholder={selectedFile ? "Ajouter une légende..." : "Écrivez votre message..."} className="w-full bg-transparent border-none outline-none text-gray-800 dark:text-white px-4 py-3.5 placeholder-gray-400 resize-none max-h-[120px] overflow-y-auto leading-relaxed scrollbar-hide" style={{ minHeight: '50px' }} />
                             </div>
                         </>
                     )}
-
                     {isRecording ? (
                         <div className="flex gap-2">
-                             <MotionButton whileTap={{ scale: 0.9 }} onClick={cancelRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center bg-gray-200 hover:bg-red-100 dark:bg-gray-800 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500 transition-colors">
-                                <Trash2 size={24} />
-                            </MotionButton>
-                            <MotionButton whileTap={{ scale: 0.95 }} onClick={handleSendAudio} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-red-500 text-white hover:bg-red-600 transition-colors">
-                                <Send size={20} />
-                            </MotionButton>
+                             <MotionButton whileTap={{ scale: 0.9 }} onClick={cancelRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center bg-gray-200 hover:bg-red-100 dark:bg-gray-800 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500 transition-colors"><Trash2 size={24} /></MotionButton>
+                            <MotionButton whileTap={{ scale: 0.95 }} onClick={handleSendAudio} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-red-500 text-white hover:bg-red-600 transition-colors"><Send size={20} /></MotionButton>
                         </div>
                     ) : (
                         showMic ? (
-                             <MotionButton whileTap={{ scale: 0.95 }} onClick={startRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600 transition-all">
-                                 <Mic size={24} />
-                             </MotionButton>
+                             <MotionButton whileTap={{ scale: 0.95 }} onClick={startRecording} className="flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600 transition-all"><Mic size={24} /></MotionButton>
                         ) : (
                             <MotionButton whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} disabled={!canSend} onClick={handleSendMessage} className={`flex-shrink-0 mb-1 h-12 w-12 rounded-full flex items-center justify-center shadow-md transition-all duration-200 ${canSend ? 'bg-brand-500 text-white shadow-brand-500/30 hover:bg-brand-600' : 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'}`}>
                                 {isSending ? <Loader2 size={20} className="animate-spin text-white" /> : <Send size={20} className={`ml-0.5 ${canSend ? 'text-white' : 'text-gray-400'}`} />}

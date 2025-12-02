@@ -27,7 +27,7 @@
     "react-dom": "^19.2.0",
     "socket.io": "^4.7.5",
     "socket.io-client": "^4.7.5",
-    "web-push": "^3.6.7"
+    "agora-rtc-sdk-ng": "^4.20.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.56",
@@ -43,4 +43,3 @@
     "vite": "^5.1.4"
   }
 }
-

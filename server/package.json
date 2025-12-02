@@ -16,7 +16,7 @@
     "multer": "^2.0.2",
     "cloudinary": "^2.0.1",
     "socket.io": "^4.7.4",
-    "web-push": "^3.6.7"
+    "agora-access-token": "^2.0.4"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"

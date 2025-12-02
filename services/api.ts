@@ -73,34 +73,34 @@ export const updateProfileAPI = async (data: any): Promise<User> => {
 export const updatePasswordAPI = async (data: any): Promise<void> => fetchWithAuth('/users/password', { method: 'PUT', body: JSON.stringify(data) });
 export const blockUserAPI = async (userId: string) => fetchWithAuth('/users/block', { method: 'POST', body: JSON.stringify({ userId }) });
 export const unblockUserAPI = async (userId: string) => fetchWithAuth('/users/unblock', { method: 'POST', body: JSON.stringify({ userId }) });
-export const getBlockedUsersAPI = async () => fetchWithAuth('/users/blocked');
+export const getBlockedUsersAPI = async (): Promise<User[]> => fetchWithAuth('/users/blocked');
 export const removeFriendAPI = async (friendId: string) => fetchWithAuth(`/friends/${friendId}`, { method: 'DELETE' });
-export const getConversationsAPI = async (userId: string) => fetchWithAuth('/conversations');
+export const getConversationsAPI = async (userId: string): Promise<Conversation[]> => fetchWithAuth('/conversations');
 export const createGroupConversationAPI = async (name: string, participantIds: string[]) => fetchWithAuth('/conversations', { method: 'POST', body: JSON.stringify({ name, participantIds }) });
 export const updateGroup = async (id: string, data: any) => { if(data.avatar) { const fd = new FormData(); if(data.name) fd.append('name', data.name); fd.append('avatar', data.avatar); return await fetchWithAuth(`/conversations/${id}`, { method: 'PUT', body: fd }); } return await fetchWithAuth(`/conversations/${id}`, { method: 'PUT', body: JSON.stringify(data) }); };
-export const getGroupMembers = async (id: string) => fetchWithAuth(`/conversations/${id}/members`);
+export const getGroupMembers = async (id: string): Promise<GroupMember[]> => fetchWithAuth(`/conversations/${id}/members`);
 export const addMembers = async (id: string, userIds: string[]) => fetchWithAuth(`/conversations/${id}/members`, { method: 'POST', body: JSON.stringify({ userIds }) });
 export const removeMember = async (id: string, userId: string) => fetchWithAuth(`/conversations/${id}/members/${userId}`, { method: 'DELETE' });
 export const leaveGroup = async (id: string) => fetchWithAuth(`/conversations/${id}/leave`, { method: 'DELETE' });
 export const destroyGroup = async (id: string) => fetchWithAuth(`/conversations/${id}/destroy`, { method: 'DELETE' });
 export const deleteConversationAPI = async (conversationId: string, userId: string) => { try { await fetchWithAuth(`/conversations/${conversationId}`, { method: 'DELETE' }); return true; } catch(e) { return false; } };
-export const getOtherParticipant = async (conversationId: string, currentUserId: string) => fetchWithAuth(`/conversations/${conversationId}/other`);
-export const getContactsAPI = async () => fetchWithAuth('/contacts');
-export const getMessagesAPI = async (conversationId: string) => fetchWithAuth(`/conversations/${conversationId}/messages`);
-export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType = 'text', file?: File, attachmentUrl?: string) => {
+export const getOtherParticipant = async (conversationId: string, currentUserId: string): Promise<User | undefined> => fetchWithAuth(`/conversations/${conversationId}/other`);
+export const getContactsAPI = async (): Promise<User[]> => fetchWithAuth('/contacts');
+export const getMessagesAPI = async (conversationId: string): Promise<Message[]> => fetchWithAuth(`/conversations/${conversationId}/messages`);
+export const sendMessageAPI = async (conversationId: string, userId: string, content: string, repliedToId?: string, messageType = 'text', file?: File, attachmentUrl?: string): Promise<Message> => {
     if (file) { const fd = new FormData(); fd.append('conversation_id', conversationId); fd.append('content', content || ""); if(repliedToId) fd.append('replied_to_message_id', repliedToId); fd.append('media', file); fd.append('message_type', messageType); return await fetchWithAuth('/messages', { method: 'POST', body: fd }); }
     return await fetchWithAuth('/messages', { method: 'POST', body: JSON.stringify({ conversation_id: conversationId, content: content || "", replied_to_message_id: repliedToId, message_type: messageType, attachment_url: attachmentUrl }) });
 };
 export const getTrendingGifsAPI = async (pos?: string) => fetchWithAuth(pos ? `/gifs/trending?pos=${pos}` : '/gifs/trending');
 export const searchGifsAPI = async (query: string, pos?: string) => fetchWithAuth(`/gifs/search?q=${encodeURIComponent(query)}${pos ? `&pos=${pos}` : ''}`);
-export const getStickersAPI = async () => fetchWithAuth('/stickers');
-export const uploadStickerAPI = async (file: File) => { const fd = new FormData(); fd.append('sticker', file); return await fetchWithAuth('/stickers', { method: 'POST', body: fd }); };
+export const getStickersAPI = async (): Promise<Sticker[]> => fetchWithAuth('/stickers');
+export const uploadStickerAPI = async (file: File): Promise<Sticker> => { const fd = new FormData(); fd.append('sticker', file); return await fetchWithAuth('/stickers', { method: 'POST', body: fd }); };
 export const reactToMessageAPI = async (messageId: string, emoji: string) => fetchWithAuth(`/messages/${messageId}/react`, { method: 'POST', body: JSON.stringify({ emoji }) });
 export const editMessageAPI = async (messageId: string, newContent: string) => fetchWithAuth(`/messages/${messageId}`, { method: 'PUT', body: JSON.stringify({ content: newContent }) });
 export const deleteMessageAPI = async (messageId: string) => { try { await fetchWithAuth(`/messages/${messageId}`, { method: 'DELETE' }); return true; } catch(e) { return false; } };
 export const markMessagesAsReadAPI = async (conversationId: string) => { try { await fetchWithAuth(`/conversations/${conversationId}/read`, { method: 'POST' }); } catch(e) {} };
 export const sendFriendRequestAPI = async (currentUserId: string, targetIdentifier: string) => fetchWithAuth('/friend_requests', { method: 'POST', body: JSON.stringify({ targetIdentifier }) });
-export const getIncomingFriendRequestsAPI = async (userId: string) => fetchWithAuth('/friend_requests');
+export const getIncomingFriendRequestsAPI = async (userId: string): Promise<FriendRequest[]> => fetchWithAuth('/friend_requests');
 export const respondToFriendRequestAPI = async (requestId: string, status: 'accepted'|'rejected') => { const res = await fetchWithAuth(`/friend_requests/${requestId}/respond`, { method: 'POST', body: JSON.stringify({ status }) }); if (status === 'accepted') return { id: res.conversationId }; return null; };
 
 // --- PUSH NOTIFICATIONS ---

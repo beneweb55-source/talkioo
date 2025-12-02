@@ -19,7 +19,7 @@ interface CallInterfaceProps {
 export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, currentUser, targetUser, isCaller, callType, onClose }) => {
     const [joined, setJoined] = useState(false);
     const [users, setUsers] = useState<any[]>([]);
-    const [localTracks, setLocalTracks] = useState<[IMicrophoneAudioTrack, ICameraVideoTrack] | [IMicrophoneAudioTrack] | []>([]);
+    const [localTracks, setLocalTracks] = useState<(IMicrophoneAudioTrack | ICameraVideoTrack)[]>([]);
     
     // Controls
     const [isMuted, setIsMuted] = useState(false);

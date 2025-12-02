@@ -509,10 +509,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
                             </div>
                         </div>
                     </div>
-                    <div className="flex gap-1 md:gap-2 flex-shrink-0 items-center">
-                        <button onClick={() => handleCall('audio')} className="p-2 md:p-2.5 text-gray-600 dark:text-gray-300 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors flex-shrink-0 flex items-center justify-center"><Phone size={20} /></button>
-                        <button onClick={() => handleCall('video')} className="p-2 md:p-2.5 text-gray-600 dark:text-gray-300 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors flex-shrink-0 flex items-center justify-center"><Video size={20} /></button>
-                        <button onClick={() => setIsSearchOpen(true)} className="p-2 md:p-2.5 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors flex-shrink-0 flex items-center justify-center"><Search size={20} /></button>
+                    <div className="flex gap-2 flex-shrink-0 items-center">
+                        <button onClick={() => handleCall('audio')} className="p-2.5 bg-gray-50 dark:bg-gray-800/50 rounded-full text-gray-900 dark:text-gray-100 hover:bg-brand-50 dark:hover:bg-brand-900/30 hover:text-brand-600 dark:hover:text-brand-400 transition-colors flex-shrink-0 z-50">
+                            <Phone size={20} />
+                        </button>
+                        <button onClick={() => handleCall('video')} className="p-2.5 bg-gray-50 dark:bg-gray-800/50 rounded-full text-gray-900 dark:text-gray-100 hover:bg-brand-50 dark:hover:bg-brand-900/30 hover:text-brand-600 dark:hover:text-brand-400 transition-colors flex-shrink-0 z-50">
+                            <Video size={20} />
+                        </button>
+                        <button onClick={() => setIsSearchOpen(true)} className="p-2.5 bg-gray-50 dark:bg-gray-800/50 rounded-full text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex-shrink-0 z-50">
+                            <Search size={20} />
+                        </button>
                     </div>
                 </>
             )}

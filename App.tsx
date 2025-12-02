@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthScreen } from './components/Auth/AuthScreen';
 import { ConversationList } from './components/Chat/ConversationList';
@@ -50,6 +50,9 @@ const Dashboard = () => {
   // Call State
   const [activeCall, setActiveCall] = useState<{ conversationId: string, targetUser?: User, type: 'audio' | 'video', isCaller: boolean } | null>(null);
   const [incomingCall, setIncomingCall] = useState<{ conversationId: string, caller: User, type: 'audio' | 'video' } | null>(null);
+  
+  // RINGTONE REF
+  const ringtoneRef = useRef<HTMLAudioElement | null>(null);
 
   // Forms State
   const [newChatTarget, setNewChatTarget] = useState('');
@@ -106,6 +109,29 @@ const Dashboard = () => {
       } catch (e) { console.error(e); }
   };
 
+  // --- RINGTONE MANAGEMENT ---
+  useEffect(() => {
+      if (incomingCall) {
+          // Play Ringtone
+          if (!ringtoneRef.current) {
+              ringtoneRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3');
+              ringtoneRef.current.loop = true;
+          }
+          ringtoneRef.current.currentTime = 0;
+          ringtoneRef.current.play().catch(e => console.log("Audio play blocked", e));
+      } else {
+          // Stop Ringtone
+          if (ringtoneRef.current) {
+              ringtoneRef.current.pause();
+              ringtoneRef.current.currentTime = 0;
+          }
+      }
+
+      return () => {
+          if (ringtoneRef.current) ringtoneRef.current.pause();
+      };
+  }, [incomingCall]);
+
   useEffect(() => {
     if (!user) return;
     setLoading(true);
@@ -145,7 +171,7 @@ const Dashboard = () => {
             // Someone joined the call
         },
         (data) => { // onDeclined
-            alert("Appel rejeté ou occupé.");
+            // Handle reject if needed
             setActiveCall(null);
         }
     );

@@ -110,6 +110,13 @@ const Dashboard = () => {
   };
 
   // --- RINGTONE MANAGEMENT ---
+  const stopRingtone = () => {
+      if (ringtoneRef.current) {
+          ringtoneRef.current.pause();
+          ringtoneRef.current.currentTime = 0;
+      }
+  };
+
   useEffect(() => {
       if (incomingCall) {
           // Play Ringtone
@@ -120,16 +127,10 @@ const Dashboard = () => {
           ringtoneRef.current.currentTime = 0;
           ringtoneRef.current.play().catch(e => console.log("Audio play blocked", e));
       } else {
-          // Stop Ringtone
-          if (ringtoneRef.current) {
-              ringtoneRef.current.pause();
-              ringtoneRef.current.currentTime = 0;
-          }
+          stopRingtone();
       }
 
-      return () => {
-          if (ringtoneRef.current) ringtoneRef.current.pause();
-      };
+      return () => stopRingtone();
   }, [incomingCall]);
 
   useEffect(() => {
@@ -173,6 +174,7 @@ const Dashboard = () => {
         (data) => { // onDeclined
             // Handle reject if needed
             setActiveCall(null);
+            stopRingtone();
         }
     );
 
@@ -201,6 +203,7 @@ const Dashboard = () => {
         document.removeEventListener('visibilitychange', handleVisibilityChange);
         window.removeEventListener('focus', handleWindowFocus);
         window.removeEventListener('init_call', handleInitCall);
+        stopRingtone();
     };
   }, [user, token, activeCall]);
 
@@ -216,6 +219,7 @@ const Dashboard = () => {
   // Call Handlers
   const handleAcceptCall = () => {
     if (!incomingCall) return;
+    stopRingtone(); // Explicitly stop ringtone before changing state
     sendCallSignal('accept', { conversationId: incomingCall.conversationId, userId: user!.id });
     setActiveCall({ 
         conversationId: incomingCall.conversationId, 
@@ -228,6 +232,7 @@ const Dashboard = () => {
 
   const handleRejectCall = () => {
     if (!incomingCall) return;
+    stopRingtone(); // Explicitly stop ringtone
     sendCallSignal('reject', { conversationId: incomingCall.conversationId, userId: user!.id, targetId: incomingCall.caller.id });
     setIncomingCall(null);
   };

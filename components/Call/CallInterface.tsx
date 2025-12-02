@@ -89,9 +89,10 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
 
                 client.current.on('user-joined', () => {
                     setCallStatus('Connecté');
-                    // Stop ringback when user joins
+                    // Stop ringback when user joins - CRITICAL FIX
                     if (ringbackRef.current) {
                         ringbackRef.current.pause();
+                        ringbackRef.current.currentTime = 0;
                         ringbackRef.current = null;
                     }
                 });
@@ -127,7 +128,10 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             } catch (error) {
                 console.error("Call init failed:", error);
                 setCallStatus("Échec connexion");
-                if (ringbackRef.current) ringbackRef.current.pause();
+                if (ringbackRef.current) {
+                    ringbackRef.current.pause();
+                    ringbackRef.current = null;
+                }
                 setTimeout(onClose, 2000);
             }
         };
@@ -135,7 +139,10 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         initCall();
 
         return () => {
-            if (ringbackRef.current) ringbackRef.current.pause();
+            if (ringbackRef.current) {
+                ringbackRef.current.pause();
+                ringbackRef.current = null;
+            }
             localAudioTrack.current?.close();
             localVideoTrack.current?.close();
             localScreenTrack.current?.close();
@@ -163,17 +170,14 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
 
     const toggleVideo = async () => {
         if (isScreenSharing) {
-            // Si on partage l'écran, on ne peut pas activer la caméra en même temps (dans cette implémentation simple)
             alert("Arrêtez le partage d'écran pour réactiver la caméra.");
             return;
         }
 
         if (localVideoTrack.current) {
-            // Si la track existe déjà, on toggle juste l'état
             await localVideoTrack.current.setEnabled(!isVideoEnabled);
             setIsVideoEnabled(!isVideoEnabled);
         } else {
-            // Création de la track si elle n'existe pas (cas départ audio)
             try {
                 localVideoTrack.current = await AgoraRTC.createCameraVideoTrack();
                 await client.current?.publish(localVideoTrack.current);
@@ -188,44 +192,41 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const startScreenShare = async (quality: ScreenQuality) => {
         setShowQualityMenu(false);
         try {
-            // 1. Configurer l'encodeur selon la qualité
+            // Stop camera first if active
+            if (localVideoTrack.current) {
+                await client.current?.unpublish(localVideoTrack.current);
+                // Don't close track, keep it for later, just unpublish
+                setIsVideoEnabled(false); 
+            }
+
             const config = SCREEN_SHARE_PROFILES[quality];
             
-            // 2. Créer la track d'écran
-            // Note: createScreenVideoTrack retourne un tableau ou une track simple selon version, ici on assume track simple ou on gère
+            // Create screen track
             const screenTrack = await AgoraRTC.createScreenVideoTrack({
                 encoderConfig: {
                     ...config,
                     bitrateMax: config.bitrate
                 },
-                optimizationMode: "detail" // Privilégier la netteté pour le texte
+                optimizationMode: "detail"
             });
 
-            // Gérer le cas où createScreenVideoTrack retourne un tableau [video, audio]
             const actualVideoTrack = Array.isArray(screenTrack) ? screenTrack[0] : screenTrack;
 
-            // 3. Arrêter la caméra si elle tourne
-            if (localVideoTrack.current) {
-                await client.current?.unpublish(localVideoTrack.current);
-                localVideoTrack.current.setEnabled(false);
-                setIsVideoEnabled(false); 
-            }
-
-            // 4. Publier l'écran
             await client.current?.publish(actualVideoTrack);
             localScreenTrack.current = actualVideoTrack;
             
-            // Afficher preview local (optionnel, souvent on ne veut pas voir son propre écran en miroir infini)
-            // actualVideoTrack.play('local-player'); 
-            
             setIsScreenSharing(true);
 
-            // 5. Gestion de l'arrêt natif (bouton "Arrêter le partage" du navigateur)
+            // Native stop handler (browser button)
             actualVideoTrack.on("track-ended", stopScreenShare);
 
         } catch (e) {
             console.error("Screen share failed", e);
-            alert("Impossible de partager l'écran.");
+            // Resume camera if screen share failed
+            if (!isScreenSharing && localVideoTrack.current) {
+                 await client.current?.publish(localVideoTrack.current);
+                 setIsVideoEnabled(true);
+            }
         }
     };
 
@@ -236,14 +237,17 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             localScreenTrack.current = null;
             setIsScreenSharing(false);
 
-            // Relancer la caméra automatiquement pour fluidité
-            if (!localVideoTrack.current) {
+            // Auto-resume camera
+            if (localVideoTrack.current) {
+                await client.current?.publish(localVideoTrack.current);
+                localVideoTrack.current.play('local-player');
+                setIsVideoEnabled(true);
+            } else {
                  localVideoTrack.current = await AgoraRTC.createCameraVideoTrack();
+                 await client.current?.publish(localVideoTrack.current);
+                 localVideoTrack.current.play('local-player');
+                 setIsVideoEnabled(true);
             }
-            await client.current?.publish(localVideoTrack.current);
-            localVideoTrack.current.setEnabled(true);
-            localVideoTrack.current.play('local-player');
-            setIsVideoEnabled(true);
         }
     };
 
@@ -277,7 +281,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                     ) : (
                         <div className="w-full h-full flex items-center justify-center bg-gray-800 text-white"><Phone size={24} className="animate-pulse" /></div>
                     )}
-                    {/* Hack to replay video in mini view if needed, or simple placeholder */}
                 </div>
             </MotionDiv>
         );
@@ -336,11 +339,10 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 )}
 
                 {/* --- LOCAL PIP (Picture in Picture) --- */}
-                {/* Mobile: Top Right floating. PC: Bottom Right fixed inside stage or separate */}
                 {(isVideoEnabled || isScreenSharing) && (
                     <MotionDiv 
                         drag
-                        dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }} // Libre mais limité
+                        dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }} 
                         className={`
                             absolute z-30 overflow-hidden shadow-2xl border border-white/20 bg-gray-800
                             ${isScreenSharing ? 'border-brand-500 border-2' : ''}
@@ -404,14 +406,14 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                         {isScreenSharing ? <X size={24} /> : <MonitorUp size={24} />}
                     </MotionButton>
 
-                    {/* QUALITY MENU POPUP */}
+                    {/* QUALITY MENU POPUP - Corrected Position */}
                     <AnimatePresence>
                         {showQualityMenu && !isScreenSharing && (
                             <MotionDiv 
                                 initial={{ opacity: 0, scale: 0.8, y: 20 }}
                                 animate={{ opacity: 1, scale: 1, y: -10 }}
                                 exit={{ opacity: 0, scale: 0.8, y: 20 }}
-                                className="absolute bottom-full md:bottom-auto md:left-full md:top-1/2 md:-translate-y-1/2 mb-4 md:mb-0 md:ml-4 bg-gray-800/90 backdrop-blur-xl border border-white/10 p-3 rounded-2xl shadow-2xl min-w-[180px] z-50 flex flex-col gap-1"
+                                className="absolute bottom-full mb-4 left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:bottom-auto md:right-full md:mr-4 bg-gray-800/90 backdrop-blur-xl border border-white/10 p-3 rounded-2xl shadow-2xl min-w-[180px] z-50 flex flex-col gap-1"
                             >
                                 <div className="text-xs font-bold text-gray-400 uppercase tracking-wider px-2 py-1 mb-1">Qualité Partage</div>
                                 {Object.keys(SCREEN_SHARE_PROFILES).map((q) => (
@@ -434,9 +436,14 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                     </AnimatePresence>
                 </div>
 
-                {/* Hang Up */}
-                <MotionButton whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={endCall} className="p-4 md:p-5 rounded-full bg-red-500 text-white shadow-xl shadow-red-500/30 hover:bg-red-600 mt-auto md:mb-6">
-                    <PhoneOff size={28} />
+                {/* Hang Up - NEW DESIGN */}
+                <MotionButton 
+                    whileHover={{ scale: 1.1 }} 
+                    whileTap={{ scale: 0.9 }} 
+                    onClick={endCall} 
+                    className="p-5 md:p-6 rounded-[24px] bg-red-500 text-white shadow-xl shadow-red-500/40 hover:bg-red-600 mt-auto md:mb-6 flex items-center justify-center transform hover:rotate-90 transition-all duration-300"
+                >
+                    <PhoneOff size={32} strokeWidth={2.5} />
                 </MotionButton>
 
                  {/* PC Minify Button (Bottom of Sidebar) */}

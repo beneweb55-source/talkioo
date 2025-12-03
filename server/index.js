@@ -741,3 +741,4 @@ app.post('/api/users/unblock', authenticateToken, async (req, res) => { const { 
 app.use((req, res) => { res.status(404).json({ error: "Route not found", path: req.url }); });
 
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+

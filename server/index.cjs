@@ -1,3 +1,4 @@
+
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
@@ -139,7 +140,6 @@ const initDB = async () => {
 initDB();
 
 // --- MIDDLEWARE ---
-// Allow CORS from any origin to support mobile devices on local network
 app.use(cors({
     origin: true, 
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -155,6 +155,9 @@ const io = new Server(server, {
     pingInterval: 25000
 });
 
+// Call State Manager
+const callState = new Map(); // conversationId -> { timer, startTime, callerId, status: 'pending'|'active' }
+
 io.on('connection', async (socket) => {
     const userId = socket.handshake.query.userId;
     if (userId) {
@@ -166,25 +169,119 @@ io.on('connection', async (socket) => {
     }
     socket.on('join_room', (roomId) => socket.join(roomId));
     
-    // Call Signaling
+    // --- CALL SIGNALING & SYSTEM MESSAGES ---
+
     socket.on('call_start', ({ conversationId, targetIds, type, caller }) => {
+        // Broadcast incoming call
         targetIds.forEach(targetId => {
-            io.to(`user:${targetId}`).emit('incoming_call', {
-                conversationId,
-                caller, 
-                type 
-            });
+            io.to(`user:${targetId}`).emit('incoming_call', { conversationId, caller, type });
         });
-    });
 
-    socket.on('call_accepted', ({ conversationId, userId }) => {
-        io.to(conversationId).emit('user_joined_call', { conversationId, userId });
-    });
+        // Set Timeout for Missed Call (30s)
+        if (!callState.has(conversationId)) {
+            const timer = setTimeout(async () => {
+                const state = callState.get(conversationId);
+                if (state && state.status === 'pending') {
+                    try {
+                        // Log Missed Call
+                        const result = await pool.query(
+                            'INSERT INTO messages (conversation_id, sender_id, content, message_type) VALUES ($1, $2, $3, $4) RETURNING *',
+                            [conversationId, caller.id, 'Appel manqué', 'call_missed']
+                        );
+                        
+                        // Notify frontend
+                        const msg = result.rows[0];
+                        const uRes = await pool.query('SELECT username, tag, avatar_url FROM users WHERE id = $1', [caller.id]);
+                        const sender = uRes.rows[0];
+                        const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}`, sender_avatar: sender.avatar_url, read_count: 0, reactions: [] };
+                        io.to(conversationId).emit('new_message', fullMsg);
+                        
+                        // Cleanup
+                        callState.delete(conversationId);
+                    } catch(e) { console.error("Error logging missed call timeout", e); }
+                }
+            }, 30000);
 
-    socket.on('call_rejected', ({ conversationId, userId, targetId }) => {
-        if (targetId) {
-            io.to(`user:${targetId}`).emit('call_declined', { userId });
+            callState.set(conversationId, { 
+                timer, 
+                callerId: caller.id, 
+                status: 'pending',
+                startTime: Date.now() 
+            });
         }
+    });
+
+    socket.on('call_accepted', async ({ conversationId, userId }) => {
+        const state = callState.get(conversationId);
+        
+        io.to(conversationId).emit('user_joined_call', { conversationId, userId });
+
+        if (state && state.status === 'pending') {
+            // Clear missed call timer
+            clearTimeout(state.timer);
+            
+            // Update state to active
+            callState.set(conversationId, { 
+                ...state, 
+                status: 'active', 
+                startTime: Date.now() 
+            });
+
+            // Log Call Started
+            try {
+                const result = await pool.query(
+                    'INSERT INTO messages (conversation_id, sender_id, content, message_type) VALUES ($1, $2, $3, $4) RETURNING *',
+                    [conversationId, userId, 'Appel commencé', 'call_started']
+                );
+                const msg = result.rows[0];
+                const uRes = await pool.query('SELECT username, tag, avatar_url FROM users WHERE id = $1', [userId]);
+                const sender = uRes.rows[0];
+                const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}`, sender_avatar: sender.avatar_url, read_count: 0, reactions: [] };
+                io.to(conversationId).emit('new_message', fullMsg);
+            } catch(e) { console.error("Error logging call start", e); }
+        }
+    });
+
+    socket.on('call_rejected', async ({ conversationId, userId, targetId }) => {
+        io.to(`user:${targetId}`).emit('call_declined', { userId }); // Notify caller
+
+        const state = callState.get(conversationId);
+        if (state && state.status === 'pending') {
+            clearTimeout(state.timer);
+            callState.delete(conversationId);
+
+            // Log Missed Call (Rejected)
+            try {
+                const result = await pool.query(
+                    'INSERT INTO messages (conversation_id, sender_id, content, message_type) VALUES ($1, $2, $3, $4) RETURNING *',
+                    [conversationId, targetId, 'Appel manqué (Refusé)', 'call_missed']
+                );
+                const msg = result.rows[0];
+                const uRes = await pool.query('SELECT username, tag, avatar_url FROM users WHERE id = $1', [targetId]);
+                const sender = uRes.rows[0];
+                const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}`, sender_avatar: sender.avatar_url, read_count: 0, reactions: [] };
+                io.to(conversationId).emit('new_message', fullMsg);
+            } catch(e) { console.error("Error logging call reject", e); }
+        }
+    });
+
+    // Handle Call Ended (Duration)
+    socket.on('log_call_end', async ({ conversationId, duration, userId }) => {
+        if (callState.has(conversationId)) {
+             callState.delete(conversationId); 
+        }
+
+        try {
+            const result = await pool.query(
+                'INSERT INTO messages (conversation_id, sender_id, content, message_type) VALUES ($1, $2, $3, $4) RETURNING *',
+                [conversationId, userId, duration.toString(), 'call_ended']
+            );
+            const msg = result.rows[0];
+            const uRes = await pool.query('SELECT username, tag, avatar_url FROM users WHERE id = $1', [userId]);
+            const sender = uRes.rows[0];
+            const fullMsg = { ...msg, sender_username: `${sender.username}#${sender.tag}`, sender_avatar: sender.avatar_url, read_count: 0, reactions: [] };
+            io.to(conversationId).emit('new_message', fullMsg);
+        } catch(e) { console.error("Error logging call end", e); }
     });
 
     socket.on('typing_start', ({ conversationId }) => {
@@ -217,8 +314,6 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
-// --- ROUTES ---
-
 app.get('/', (req, res) => res.send("Talkio Backend is Running 🚀"));
 
 // --- AGORA TOKEN ROUTE ---
@@ -230,47 +325,19 @@ app.get('/api/agora/token/:channelName', authenticateToken, (req, res) => {
     const currentTimestamp = Math.floor(Date.now() / 1000);
     const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
 
-    // --- CRITICAL FIX FOR CONNECTION ---
-    // Use environment variables OR fallbacks directly here
-    // This prevents "Token generation failed" if env vars are missing on host
     const appId = (process.env.AGORA_APP_ID || 'c14c9732092a4efd9ef0c8b44567de91').trim();
     const appCertificate = (process.env.AGORA_APP_CERTIFICATE || 'c915f268ecf8428f890e1b3117811dbe').trim();
 
-    if (!appId || !appCertificate) {
-        console.error("Agora credentials missing in server config.");
-        // We still return a valid structure so the frontend doesn't crash immediately,
-        // though the connection will likely fail later on the client side.
-        return res.json({ token: "mock_token_missing_keys", appId: "mock_app_id" });
-    }
+    if (!appId || !appCertificate) return res.json({ token: "mock_token_missing_keys", appId: "mock_app_id" });
 
     try {
-        if (!RtcTokenBuilder) {
-             throw new Error("RtcTokenBuilder module not loaded correctly");
-        }
-        
-        console.log(`Generating token for channel: ${channelName}, account: ${account}`);
-        
-        const token = RtcTokenBuilder.buildTokenWithAccount(
-            appId,
-            appCertificate,
-            channelName,
-            account,
-            role,
-            privilegeExpiredTs
-        );
+        const token = RtcTokenBuilder.buildTokenWithAccount(appId, appCertificate, channelName, account, role, privilegeExpiredTs);
         res.json({ token, appId });
     } catch (error) {
-        console.error("Agora Token Generation Error:", error);
-        // Fallback to mock token to prevent client crash
-        res.status(200).json({ 
-            token: "mock_token_generation_failed", 
-            appId: appId, 
-            error: "Token generation failed" 
-        });
+        res.status(200).json({ token: "mock_token_generation_failed", appId: appId, error: "Token generation failed" });
     }
 });
 
-// --- AUTH ---
 app.post('/api/auth/register', async (req, res) => {
     let { username, email, password } = req.body;
     try {
@@ -295,7 +362,6 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- PROFILE ---
 app.put('/api/users/profile', authenticateToken, upload.single('avatar'), async (req, res) => {
     const { username, email, theme_color } = req.body;
     let avatarUrl = null;
@@ -330,8 +396,6 @@ app.put('/api/users/password', authenticateToken, async (req, res) => {
         res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// --- SPECIFIC ROUTES BEFORE ID ROUTE ---
 
 app.get('/api/contacts', authenticateToken, async (req, res) => {
     try {

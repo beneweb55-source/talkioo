@@ -1,15 +1,14 @@
 import React, { useEffect, useRef, useState, useMemo, useLayoutEffect } from 'react';
 import AgoraRTC, { 
-    IAgoraRTCClient, ICameraVideoTrack, IMicrophoneAudioTrack, ILocalVideoTrack, 
-    UID
+    IAgoraRTCClient, ICameraVideoTrack, IMicrophoneAudioTrack, ILocalVideoTrack
 } from 'agora-rtc-sdk-ng';
 import { User } from '../../types';
 import { getAgoraTokenAPI, sendCallSignal } from '../../services/api';
 import { 
     PhoneOff, Video, VideoOff, Mic, MicOff, Minimize2, Settings, X, Signal, 
-    MonitorUp, Maximize2, User as UserIcon, LayoutGrid, Layout, Star
+    MonitorUp, Maximize2, User as UserIcon, LayoutGrid, Layout
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, Variants } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
 const MotionButton = motion.button as any;
@@ -26,7 +25,6 @@ interface CallInterfaceProps {
 // --- CONFIGURATION ---
 const isMobile = window.innerWidth < 768;
 
-// Config Discord-like pour la fluidité
 const CAMERA_ENCODER_CONFIG: any = isMobile ? {
     width: { ideal: 1280, min: 640 },
     height: { ideal: 720, min: 480 },
@@ -41,11 +39,9 @@ const CAMERA_ENCODER_CONFIG: any = isMobile ? {
     optimizationMode: "motion"
 };
 
-// Profils de partage d'écran (Priorité : Lisibilité Texte)
 const SCREEN_SHARE_PROFILES = {
     HD: { width: 1920, height: 1080, frameRate: 15, bitrate: 2000 },
     FHD: { width: 1920, height: 1080, frameRate: 30, bitrate: 4000 },
-    '2K': { width: 2560, height: 1440, frameRate: 30, bitrate: 6000 },
     '60FPS': { width: 1920, height: 1080, frameRate: 60, bitrate: 6000 }
 };
 
@@ -67,6 +63,34 @@ interface Participant {
     joinedAt: number;
 }
 
+// Framer Motion Variants for Smooth Window Transition
+const containerVariants: Variants = {
+    full: {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100%',
+        height: '100%',
+        borderRadius: 0,
+        zIndex: 100,
+        transition: { type: 'spring', stiffness: 200, damping: 25 }
+    },
+    mini: {
+        position: 'fixed',
+        top: 'auto',
+        left: 'auto',
+        right: 16,
+        bottom: 96, // Above bottom nav/chat input
+        width: isMobile ? 140 : 320,
+        height: isMobile ? 200 : 180,
+        borderRadius: 16,
+        zIndex: 100,
+        transition: { type: 'spring', stiffness: 200, damping: 25 }
+    }
+};
+
 export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, currentUser, targetUser, isCaller, callType, onClose }) => {
     // --- STATE ---
     const [remoteJoined, setRemoteJoined] = useState(false);
@@ -77,8 +101,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const localVideoTrack = useRef<ICameraVideoTrack | null>(null);
     const localScreenTrack = useRef<ILocalVideoTrack | null>(null);
     
-    // UI Layout Refs
-    const containerRef = useRef<HTMLDivElement>(null);
     const ringbackRef = useRef<HTMLAudioElement | null>(null);
     const hangupSoundRef = useRef<HTMLAudioElement | null>(null);
 
@@ -126,8 +148,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     // --- AUTO-MUTE BACKGROUND ---
     useEffect(() => {
         const handleVisibilityChange = async () => {
-            // Optionnel : Couper la vidéo pour économiser la bande passante si l'onglet est masqué
-            // Pour l'instant on laisse actif comme Discord
+            // Keep video active for seamless background experience (Discord behavior)
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -185,7 +206,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                     await client.current?.subscribe(user, mediaType);
                     setRemoteParticipants(prev => {
                         const existing = prev.find(p => p.id === user.uid);
-                        
                         const newUser = existing || {
                             id: user.uid,
                             username: targetUser?.id === user.uid ? targetUser.username : `User ${user.uid}`,
@@ -323,7 +343,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         if (isTransitioning) return;
         setIsTransitioning(true);
         setIsMinimized(!isMinimized);
-        setTimeout(() => setIsTransitioning(false), 600);
+        setTimeout(() => setIsTransitioning(false), 500);
     };
 
     const startScreenShare = async (quality: ScreenQuality) => {
@@ -381,13 +401,11 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
 
     // --- DISCORD-LIKE LAYOUT ENGINE ---
     
-    // 1. Identify "Focus" (Screen Share or Pinned)
     const focusParticipant = useMemo(() => {
         if (localParticipant.isScreenSharing) return localParticipant;
         return remoteParticipants.find(p => p.isScreenSharing);
     }, [localParticipant, remoteParticipants]);
 
-    // 2. Identify "Grid" members
     const gridParticipants = useMemo(() => {
         let all = [localParticipant, ...remoteParticipants];
         if (focusParticipant) {
@@ -395,32 +413,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         }
         return all;
     }, [localParticipant, remoteParticipants, focusParticipant]);
-
-    // --- MINI PLAYER ---
-    if (isMinimized && !showFeedback) {
-        return (
-            <MotionDiv 
-                drag 
-                dragMomentum={false} 
-                initial={{ scale: 0 }} 
-                animate={{ scale: 1 }} 
-                className={`fixed bottom-24 right-4 z-[100] w-40 h-64 bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden flex flex-col cursor-pointer hover:scale-105 transition-transform ${isTransitioning ? 'pointer-events-none' : ''}`} 
-                onClick={toggleMinimize}
-            >
-                 <div className="flex-1 relative bg-black">
-                     {/* Priorité : Partage d'écran > Remote > Local */}
-                     {remoteJoined && remoteParticipants.length > 0 ? (
-                         <Tile participant={focusParticipant || remoteParticipants[0]} isMini={true} />
-                     ) : (
-                         <div className="w-full h-full flex items-center justify-center"><UserIcon className="text-gray-500"/></div>
-                     )}
-                     <div className="absolute top-2 right-2 w-12 h-16 bg-gray-800 rounded border border-white/20 overflow-hidden shadow-lg">
-                        <Tile participant={localParticipant} isMini={true} />
-                     </div>
-                 </div>
-            </MotionDiv>
-        );
-    }
 
     // --- FEEDBACK SCREEN ---
     if (showFeedback) {
@@ -442,29 +434,40 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         );
     }
 
-    // --- MAIN RENDER ---
+    // --- UNIFIED RENDER (No more unmounting between mini/full) ---
     return (
-        <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] bg-[#121212] text-white flex flex-col font-sans overflow-hidden">
+        <MotionDiv 
+            variants={containerVariants}
+            initial="full"
+            animate={isMinimized ? "mini" : "full"}
+            className="bg-[#121212] text-white flex flex-col font-sans overflow-hidden shadow-2xl border border-gray-800"
+            drag={isMinimized}
+            dragMomentum={false}
+            dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
+            onClick={isMinimized && !isTransitioning ? toggleMinimize : undefined}
+        >
             
-            {/* Header */}
-            <div className="absolute top-0 left-0 right-0 p-4 z-20 flex justify-between items-center pointer-events-none">
-                <div className={`pointer-events-auto flex items-center gap-3 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 shadow-lg ${isTransitioning ? 'pointer-events-none' : ''}`}>
-                    <button onClick={toggleMinimize} className="hover:text-gray-300 transition-colors"><Minimize2 size={18}/></button>
-                    <div className="w-[1px] h-4 bg-white/20"></div>
-                    <div>
-                        <h2 className="font-bold text-sm leading-none flex items-center gap-2">
-                            {targetUser?.username || (remoteParticipants.length > 0 ? `${remoteParticipants.length + 1} Participants` : 'Appel')}
-                            {remoteJoined && <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>}
-                        </h2>
-                        <span className="text-[10px] text-gray-400 flex items-center gap-1">{getNetworkIcon()} {callStatus}</span>
+            {/* Header (Hidden in Mini Mode) */}
+            {!isMinimized && (
+                <div className="absolute top-0 left-0 right-0 p-4 z-20 flex justify-between items-center pointer-events-none">
+                    <div className={`pointer-events-auto flex items-center gap-3 bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 shadow-lg ${isTransitioning ? 'pointer-events-none' : ''}`}>
+                        <button onClick={toggleMinimize} className="hover:text-gray-300 transition-colors"><Minimize2 size={18}/></button>
+                        <div className="w-[1px] h-4 bg-white/20"></div>
+                        <div>
+                            <h2 className="font-bold text-sm leading-none flex items-center gap-2">
+                                {targetUser?.username || (remoteParticipants.length > 0 ? `${remoteParticipants.length + 1} Participants` : 'Appel')}
+                                {remoteJoined && <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>}
+                            </h2>
+                            <span className="text-[10px] text-gray-400 flex items-center gap-1">{getNetworkIcon()} {callStatus}</span>
+                        </div>
                     </div>
+                    <button onClick={() => setShowSettings(true)} className="pointer-events-auto p-2 bg-black/60 hover:bg-black/80 backdrop-blur-md rounded-full border border-white/10 transition-colors"><Settings size={18} className="text-gray-300" /></button>
                 </div>
-                <button onClick={() => setShowSettings(true)} className="pointer-events-auto p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md rounded-full border border-white/10 transition-colors"><Settings size={18} className="text-gray-300" /></button>
-            </div>
+            )}
 
-            {/* Settings Modal */}
+            {/* Settings Modal (Always on top) */}
             <AnimatePresence>
-                {showSettings && (
+                {showSettings && !isMinimized && (
                     <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
                         <div className="bg-gray-800 w-full max-w-sm rounded-2xl p-6 border border-gray-700 relative shadow-2xl">
                             <button onClick={() => setShowSettings(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white"><X size={20}/></button>
@@ -481,76 +484,98 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             </AnimatePresence>
 
             {/* Layout Stage */}
-            <div ref={containerRef} className="flex-1 w-full h-full relative p-2 md:p-4 flex flex-col overflow-hidden">
-                {!remoteJoined ? (
-                    <div className="flex-1 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
-                        <div className="relative mb-8">
-                            <div className="h-32 w-32 md:h-40 md:w-40 rounded-full bg-gray-800 p-1 ring-4 ring-white/5 relative z-10 overflow-hidden shadow-2xl">
-                                {targetUser?.avatar_url ? <img src={targetUser.avatar_url} className="w-full h-full rounded-full object-cover" /> : <div className="w-full h-full rounded-full bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center text-4xl font-bold">{targetUser?.username?.[0]}</div>}
-                            </div>
+            <div className="flex-1 w-full h-full relative flex flex-col overflow-hidden">
+                {isMinimized ? (
+                    // --- MINI VIEW CONTENT ---
+                    <div className="w-full h-full relative bg-gray-900 overflow-hidden rounded-2xl cursor-pointer">
+                        {remoteJoined && (focusParticipant || remoteParticipants[0] || localParticipant) ? (
+                            <Tile 
+                                participant={focusParticipant || remoteParticipants[0] || localParticipant} 
+                                fit={focusParticipant ? "contain" : "cover"} 
+                                isMini={true} 
+                            />
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-gray-800"><UserIcon className="text-gray-500"/></div>
+                        )}
+                        {/* Overlay for Local Preview in Mini Mode */}
+                        <div className="absolute top-2 right-2 w-16 h-24 bg-gray-800 rounded border border-white/20 overflow-hidden shadow-lg z-10">
+                            <Tile participant={localParticipant} isMini={true} fit="cover" />
                         </div>
-                        <h3 className="text-2xl font-bold mb-2">Appel en cours...</h3>
                     </div>
                 ) : (
-                    <div className="flex-1 w-full h-full flex flex-col gap-2">
-                        {/* 1. FOCUS MODE */}
-                        {focusParticipant ? (
-                            <div className="flex-1 flex flex-col md:flex-row gap-2 h-full overflow-hidden">
-                                <div className="flex-1 bg-black rounded-2xl overflow-hidden relative border border-white/5 shadow-2xl">
-                                    <Tile participant={focusParticipant} fit="contain" />
-                                    <div className="absolute top-4 left-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 backdrop-blur-md border border-white/10">
-                                        <MonitorUp size={12} className="text-brand-500"/>
-                                        {focusParticipant.isLocal ? 'Vous partagez votre écran' : `${focusParticipant.username} partage son écran`}
+                    // --- FULL VIEW CONTENT ---
+                    !remoteJoined ? (
+                        <div className="flex-1 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
+                            <div className="relative mb-8">
+                                <div className="h-32 w-32 md:h-40 md:w-40 rounded-full bg-gray-800 p-1 ring-4 ring-white/5 relative z-10 overflow-hidden shadow-2xl">
+                                    {targetUser?.avatar_url ? <img src={targetUser.avatar_url} className="w-full h-full rounded-full object-cover" /> : <div className="w-full h-full rounded-full bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center text-4xl font-bold">{targetUser?.username?.[0]}</div>}
+                                </div>
+                            </div>
+                            <h3 className="text-2xl font-bold mb-2">Appel en cours...</h3>
+                        </div>
+                    ) : (
+                        <div className="flex-1 w-full h-full flex flex-col gap-2 p-2 md:p-4">
+                            {/* 1. FOCUS MODE (Stage + Filmstrip) */}
+                            {focusParticipant ? (
+                                <div className="flex-1 flex flex-col md:flex-row gap-2 h-full overflow-hidden">
+                                    <div className="flex-1 bg-black rounded-2xl overflow-hidden relative border border-white/5 shadow-2xl">
+                                        <Tile participant={focusParticipant} fit="contain" />
+                                        <div className="absolute top-4 left-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 backdrop-blur-md border border-white/10">
+                                            <MonitorUp size={12} className="text-brand-500"/>
+                                            {focusParticipant.isLocal ? 'Vous partagez votre écran' : `${focusParticipant.username} partage son écran`}
+                                        </div>
+                                    </div>
+                                    <div className={`flex md:flex-col gap-2 overflow-auto h-[140px] md:h-full md:w-[260px] ${gridParticipants.length === 0 ? 'hidden' : ''}`}>
+                                        {gridParticipants.map(p => (
+                                            <div key={p.id} className="min-w-[180px] md:min-w-0 md:h-[180px] bg-gray-900 rounded-xl overflow-hidden flex-shrink-0 border border-white/5 relative shadow-lg">
+                                                <Tile participant={p} fit="cover" />
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
-                                <div className={`flex md:flex-col gap-2 overflow-auto h-[140px] md:h-full md:w-[260px] ${gridParticipants.length === 0 ? 'hidden' : ''}`}>
+                            ) : (
+                                /* 2. GRID MODE (Dynamic) */
+                                <div className={`
+                                    grid gap-2 w-full h-full max-w-[1800px] mx-auto transition-all duration-300 ease-in-out
+                                    ${gridParticipants.length === 1 ? 'grid-cols-1' :
+                                      gridParticipants.length === 2 ? (isMobile ? 'grid-rows-2' : 'grid-cols-2') :
+                                      gridParticipants.length <= 4 ? 'grid-cols-2 grid-rows-2' :
+                                      gridParticipants.length <= 6 ? (isMobile ? 'grid-cols-2' : 'grid-cols-3 grid-rows-2') :
+                                      (isMobile ? 'grid-cols-2' : 'grid-cols-4')}
+                                `} style={{ maxHeight: 'calc(100vh - 120px)' }}>
                                     {gridParticipants.map(p => (
-                                        <div key={p.id} className="min-w-[180px] md:min-w-0 md:h-[180px] bg-gray-900 rounded-xl overflow-hidden flex-shrink-0 border border-white/5 relative shadow-lg">
+                                        <div key={p.id} className="relative w-full h-full min-h-[150px] bg-gray-900 rounded-2xl overflow-hidden border border-white/5 shadow-xl">
                                             <Tile participant={p} fit="cover" />
                                         </div>
                                     ))}
                                 </div>
-                            </div>
-                        ) : (
-                            /* 2. GRID MODE */
-                            <div className={`
-                                grid gap-2 w-full h-full max-w-[1800px] mx-auto transition-all duration-300 ease-in-out
-                                ${gridParticipants.length === 1 ? 'grid-cols-1' :
-                                  gridParticipants.length === 2 ? (isMobile ? 'grid-rows-2' : 'grid-cols-2') :
-                                  gridParticipants.length <= 4 ? 'grid-cols-2 grid-rows-2' :
-                                  gridParticipants.length <= 6 ? (isMobile ? 'grid-cols-2' : 'grid-cols-3 grid-rows-2') :
-                                  (isMobile ? 'grid-cols-2' : 'grid-cols-4')}
-                            `} style={{ maxHeight: 'calc(100vh - 120px)' }}>
-                                {gridParticipants.map(p => (
-                                    <div key={p.id} className="relative w-full h-full min-h-[150px] bg-gray-900 rounded-2xl overflow-hidden border border-white/5 shadow-xl">
-                                        <Tile participant={p} fit="cover" />
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+                            )}
+                        </div>
+                    )
                 )}
             </div>
 
-            {/* Controls */}
-            <div className="flex justify-center pb-6 pt-4 w-full z-40 bg-gradient-to-t from-black via-black/80 to-transparent">
-                <div className="flex items-center gap-3 px-6 py-3 bg-gray-900/90 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl">
-                    <ControlBtn active={!isMuted} onClick={toggleMute} onIcon={<Mic size={20}/>} offIcon={<MicOff size={20}/>} />
-                    <ControlBtn active={isVideoEnabled} onClick={toggleVideo} onIcon={<Video size={20}/>} offIcon={<VideoOff size={20}/>} />
-                    <div className="relative">
-                        <ControlBtn active={isScreenSharing} onClick={() => { if(isScreenSharing) stopScreenShare(); else setShowQualityMenu(!showQualityMenu); }} onIcon={<MonitorUp size={20} className="text-white"/>} offIcon={<MonitorUp size={20}/>} className={isScreenSharing ? 'bg-green-600' : ''} />
-                        <AnimatePresence>
-                            {showQualityMenu && !isScreenSharing && (
-                                <MotionDiv initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: -15 }} exit={{ opacity: 0 }} className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-gray-800 border border-white/10 p-2 rounded-xl shadow-xl min-w-[140px] flex flex-col gap-1">
-                                    {Object.keys(SCREEN_SHARE_PROFILES).map((q) => (<button key={q} onClick={() => startScreenShare(q as ScreenQuality)} className="px-3 py-2 text-sm text-left hover:bg-white/10 rounded-lg text-gray-200">{q}</button>))}
-                                </MotionDiv>
-                            )}
-                        </AnimatePresence>
+            {/* Controls (Hidden in Mini Mode) */}
+            {!isMinimized && (
+                <div className="flex justify-center pb-6 pt-4 w-full z-40 bg-gradient-to-t from-black via-black/80 to-transparent flex-shrink-0">
+                    <div className="flex items-center gap-3 px-6 py-3 bg-gray-900/90 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl">
+                        <ControlBtn active={!isMuted} onClick={toggleMute} onIcon={<Mic size={20}/>} offIcon={<MicOff size={20}/>} />
+                        <ControlBtn active={isVideoEnabled} onClick={toggleVideo} onIcon={<Video size={20}/>} offIcon={<VideoOff size={20}/>} />
+                        <div className="relative">
+                            <ControlBtn active={isScreenSharing} onClick={() => { if(isScreenSharing) stopScreenShare(); else setShowQualityMenu(!showQualityMenu); }} onIcon={<MonitorUp size={20} className="text-white"/>} offIcon={<MonitorUp size={20}/>} className={isScreenSharing ? 'bg-green-600' : ''} />
+                            <AnimatePresence>
+                                {showQualityMenu && !isScreenSharing && (
+                                    <MotionDiv initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: -15 }} exit={{ opacity: 0 }} className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-gray-800 border border-white/10 p-2 rounded-xl shadow-xl min-w-[140px] flex flex-col gap-1">
+                                        {Object.keys(SCREEN_SHARE_PROFILES).map((q) => (<button key={q} onClick={() => startScreenShare(q as ScreenQuality)} className="px-3 py-2 text-sm text-left hover:bg-white/10 rounded-lg text-gray-200">{q}</button>))}
+                                    </MotionDiv>
+                                )}
+                            </AnimatePresence>
+                        </div>
+                        <div className="w-px h-8 bg-white/10 mx-1"></div>
+                        <MotionButton onClick={endCall} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl shadow-lg shadow-red-600/20"><PhoneOff size={24} /></MotionButton>
                     </div>
-                    <div className="w-px h-8 bg-white/10 mx-1"></div>
-                    <MotionButton onClick={endCall} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl shadow-lg shadow-red-600/20"><PhoneOff size={24} /></MotionButton>
                 </div>
-            </div>
+            )}
         </MotionDiv>
     );
 };
@@ -574,7 +599,7 @@ const Tile = ({ participant, fit = "cover", isMini = false }: { participant: Par
                 const shouldMirror = participant.isLocal && !participant.isScreenSharing;
                 
                 // Stop previous playback to prevent 'track already playing' errors or stale frames
-                participant.videoTrack.stop(); 
+                // participant.videoTrack.stop(); // Removed excessive stopping which can cause flicker on some browsers
                 
                 // Play with precise config
                 participant.videoTrack.play(container, { mirror: shouldMirror, fit });
@@ -589,9 +614,11 @@ const Tile = ({ participant, fit = "cover", isMini = false }: { participant: Par
         }
         
         return () => {
-            // Cleanup prevents ghosting
+            // Only stop if we are truly unmounting the participant
+            // To allow seamless transition, we might want to avoid stopping if re-parenting
+            // But Agora Web SDK usually requires a stop before playing in new element
             try {
-                if (participant.videoTrack) participant.videoTrack.stop();
+               if(participant.videoTrack) participant.videoTrack.stop(); 
             } catch(e) {}
         };
     }, [participant.videoTrack, fit, participant.isScreenSharing, isMini, participant.isLocal]); 

@@ -1,13 +1,12 @@
-
 import React, { useEffect, useRef, useState, useMemo, useLayoutEffect } from 'react';
 import AgoraRTC, { 
-    IAgoraRTCClient, ICameraVideoTrack, IMicrophoneAudioTrack, ILocalVideoTrack
+    IAgoraRTCClient, ICameraVideoTrack, IMicrophoneAudioTrack, ILocalVideoTrack, VideoEncoderConfiguration
 } from 'agora-rtc-sdk-ng';
 import { User } from '../../types';
 import { getAgoraTokenAPI, sendCallSignal, logCallEnd } from '../../services/api';
 import { 
     PhoneOff, Video, VideoOff, Mic, MicOff, Minimize2, Settings, X, Signal, 
-    MonitorUp, Maximize2, User as UserIcon, LayoutGrid, Layout
+    MonitorUp, User as UserIcon, Activity
 } from 'lucide-react';
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 
@@ -23,21 +22,21 @@ interface CallInterfaceProps {
     onClose: () => void;
 }
 
-// --- CONFIGURATION ---
+// --- CONFIGURATION QUALITÉ ---
 const isMobile = window.innerWidth < 768;
 
-const CAMERA_ENCODER_CONFIG: any = isMobile ? {
-    width: { ideal: 1280, min: 640 },
-    height: { ideal: 720, min: 480 },
-    frameRate: { min: 24, max: 30, ideal: 30 },
-    bitrateMin: 600, bitrateMax: 1500,
-    optimizationMode: "motion"
-} : {
-    width: { ideal: 1920, min: 1280 },
-    height: { ideal: 1080, min: 720 },
-    frameRate: { min: 30, max: 60, ideal: 60 },
-    bitrateMin: 1500, bitrateMax: 4000,
-    optimizationMode: "motion"
+type QualityPreset = 'HD' | 'FHD' | '2K';
+
+const VIDEO_PROFILES: Record<QualityPreset, VideoEncoderConfiguration> = {
+    'HD': { // 720p - Bonne balance
+        width: 1280, height: 720, frameRate: 30, bitrateMin: 1500, bitrateMax: 2500, optimizationMode: "motion" 
+    },
+    'FHD': { // 1080p - Très fluide
+        width: 1920, height: 1080, frameRate: 60, bitrateMin: 3000, bitrateMax: 6000, optimizationMode: "motion" 
+    },
+    '2K': { // 1440p - Qualité max (PC Puissant requis)
+        width: 2560, height: 1440, frameRate: 60, bitrateMin: 6000, bitrateMax: 9000, optimizationMode: "detail" 
+    }
 };
 
 const SCREEN_SHARE_PROFILES = {
@@ -77,7 +76,9 @@ const containerVariants: Variants = {
         borderRadius: 0,
         x: 0,
         y: 0,
-        transition: { type: 'spring', stiffness: 300, damping: 30 }
+        scale: 1,
+        boxShadow: "0px 0px 0px rgba(0,0,0,0)",
+        transition: { type: 'spring', stiffness: 280, damping: 30 }
     },
     mini: {
         position: 'fixed',
@@ -90,13 +91,16 @@ const containerVariants: Variants = {
         borderRadius: 16,
         x: 0,
         y: 0,
-        transition: { type: 'spring', stiffness: 300, damping: 30 }
+        scale: 1,
+        boxShadow: "0px 10px 30px rgba(0,0,0,0.5)",
+        transition: { type: 'spring', stiffness: 280, damping: 30 }
     }
 };
 
 export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, currentUser, targetUser, isCaller, callType, onClose }) => {
     // --- STATE ---
     const [remoteJoined, setRemoteJoined] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
     
     // Core Agora
     const client = useRef<IAgoraRTCClient | null>(null);
@@ -104,8 +108,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const localVideoTrack = useRef<ICameraVideoTrack | null>(null);
     const localScreenTrack = useRef<ILocalVideoTrack | null>(null);
     
-    // UI Layout Refs
-    const containerRef = useRef<HTMLDivElement>(null);
     const ringbackRef = useRef<HTMLAudioElement | null>(null);
     const hangupSoundRef = useRef<HTMLAudioElement | null>(null);
 
@@ -132,6 +134,9 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const [isVideoEnabled, setIsVideoEnabled] = useState(callType === 'video');
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     
+    // Config State
+    const [videoQuality, setVideoQuality] = useState<QualityPreset>(isMobile ? 'HD' : 'FHD');
+
     // Window State
     const [isMinimized, setIsMinimized] = useState(false);
     const [isTransitioning, setIsTransitioning] = useState(false); 
@@ -143,7 +148,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
 
     // Feedback State
     const [showFeedback, setShowFeedback] = useState(false);
-    const [feedbackRating, setFeedbackRating] = useState<string | null>(null);
+    // const [feedbackRating, setFeedbackRating] = useState<string | null>(null);
 
     // Devices
     const [mics, setMics] = useState<DeviceInfo[]>([]);
@@ -155,7 +160,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
 
     // --- AUTO-MUTE BACKGROUND ---
     useEffect(() => {
-        // Keep video active for seamless experience
         const handleVisibilityChange = async () => {};
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -191,6 +195,19 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
              // @ts-ignore
              if (u.audioTrack && u.audioTrack.setAudioOutput) u.audioTrack.setAudioOutput(deviceId);
         });
+    };
+
+    // --- CHANGE QUALITY ON THE FLY ---
+    const handleQualityChange = async (newQuality: QualityPreset) => {
+        setVideoQuality(newQuality);
+        if (localVideoTrack.current) {
+            try {
+                await localVideoTrack.current.setEncoderConfiguration(VIDEO_PROFILES[newQuality]);
+                console.log(`Quality switched to ${newQuality}`);
+            } catch (e) {
+                console.error("Failed to switch quality", e);
+            }
+        }
     };
 
     // --- INITIALIZATION ---
@@ -292,7 +309,11 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 setLocalParticipant(p => ({...p, audioTrack: localAudioTrack.current, hasAudio: true}));
 
                 if (callType === 'video') {
-                    localVideoTrack.current = await AgoraRTC.createCameraVideoTrack({ encoderConfig: CAMERA_ENCODER_CONFIG });
+                    // Start with selected quality
+                    localVideoTrack.current = await AgoraRTC.createCameraVideoTrack({ 
+                        encoderConfig: VIDEO_PROFILES[videoQuality] 
+                    });
+                    
                     if(selectedCam) await localVideoTrack.current.setDevice(selectedCam);
                     await client.current.publish(localVideoTrack.current);
                     setLocalParticipant(p => ({...p, videoTrack: localVideoTrack.current, hasVideo: true}));
@@ -339,7 +360,8 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             setIsVideoEnabled(!isVideoEnabled);
             setLocalParticipant(p => ({...p, hasVideo: !isVideoEnabled}));
         } else {
-            localVideoTrack.current = await AgoraRTC.createCameraVideoTrack({ encoderConfig: CAMERA_ENCODER_CONFIG });
+            // Ensure quality settings when re-enabling
+            localVideoTrack.current = await AgoraRTC.createCameraVideoTrack({ encoderConfig: VIDEO_PROFILES[videoQuality] });
             if(selectedCam) await localVideoTrack.current.setDevice(selectedCam);
             await client.current?.publish(localVideoTrack.current);
             setLocalParticipant(p => ({...p, videoTrack: localVideoTrack.current, hasVideo: true}));
@@ -397,7 +419,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         if (targetUser) sendCallSignal('reject', { conversationId, targetId: targetUser.id, userId: currentUser.id });
         if (hangupSoundRef.current) hangupSoundRef.current.play().catch(e => console.error(e));
         
-        // Log Duration via API socket
         const duration = Math.floor((Date.now() - startTime) / 1000);
         logCallEnd(conversationId, duration, currentUser.id);
 
@@ -405,14 +426,14 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         setShowFeedback(true);
     };
 
-    const handleFeedbackSubmit = (rating: string) => {
+    /* const handleFeedbackSubmit = (rating: string) => {
         setFeedbackRating(rating);
         setTimeout(onClose, 400); 
-    };
+    }; */
 
     const getNetworkIcon = () => { if (networkQuality > 4) return <Signal size={16} className="text-red-500" />; if (networkQuality > 2) return <Signal size={16} className="text-yellow-500" />; return <Signal size={16} className="text-green-500" />; };
 
-    // --- DISCORD-LIKE LAYOUT ENGINE ---
+    // --- LAYOUT LOGIC ---
     const focusParticipant = useMemo(() => {
         if (localParticipant.isScreenSharing) return localParticipant;
         return remoteParticipants.find(p => p.isScreenSharing);
@@ -432,12 +453,13 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             <MotionDiv 
                 drag 
                 dragMomentum={false} 
-                initial={{ scale: 0 }} 
-                animate={{ scale: 1 }} 
-                className={`fixed bottom-24 right-4 z-[100] w-40 h-64 bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden flex flex-col cursor-pointer hover:scale-105 transition-transform ${isTransitioning ? 'pointer-events-none' : ''}`} 
+                initial="full"
+                animate="mini"
+                variants={containerVariants}
+                className="bg-gray-900 overflow-hidden shadow-2xl border border-gray-700 z-[100] cursor-pointer"
                 onClick={toggleMinimize}
             >
-                 <div className="flex-1 relative bg-black">
+                 <div className="flex-1 w-full h-full relative bg-black">
                      {remoteJoined && remoteParticipants.length > 0 ? (
                          <Tile participant={focusParticipant || remoteParticipants[0]} isMini={true} />
                      ) : (
@@ -447,26 +469,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                         <Tile participant={localParticipant} isMini={true} />
                      </div>
                  </div>
-            </MotionDiv>
-        );
-    }
-
-    // --- FEEDBACK SCREEN ---
-    if (showFeedback) {
-        const reactions = [ { label: 'Terrible', emoji: '😖' }, { label: 'Mauvais', emoji: '😕' }, { label: 'Moyen', emoji: '😐' }, { label: 'Bien', emoji: '🙂' }, { label: 'Excellent', emoji: '🤩' } ];
-        return (
-            <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-                <MotionDiv initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} className="bg-gray-800 border border-gray-700 rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
-                    <h3 className="text-xl font-bold text-white mb-2">Appel terminé</h3>
-                    <div className="flex justify-between gap-2 mb-6 mt-6">
-                        {reactions.map((r) => (
-                            <button key={r.label} onClick={() => handleFeedbackSubmit(r.label)} className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${feedbackRating === r.label ? 'bg-brand-500/20 scale-110' : 'hover:bg-white/5 hover:scale-105'}`}>
-                                <span className="text-3xl">{r.emoji}</span>
-                            </button>
-                        ))}
-                    </div>
-                    <button onClick={onClose} className="text-gray-500 hover:text-white text-sm underline">Passer</button>
-                </MotionDiv>
             </MotionDiv>
         );
     }
@@ -502,7 +504,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 </div>
             )}
 
-            {/* Settings Modal (Always on top) */}
+            {/* Settings Modal */}
             <AnimatePresence>
                 {showSettings && !isMinimized && (
                     <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -510,6 +512,20 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                             <button onClick={() => setShowSettings(false)} className="absolute top-4 right-4 text-gray-400 hover:text-white"><X size={20}/></button>
                             <h3 className="text-lg font-bold mb-6 flex items-center gap-2"><Settings size={18} className="text-brand-500"/> Paramètres</h3>
                             <div className="space-y-4">
+                                <div>
+                                    <label className="text-xs font-semibold text-gray-400 uppercase mb-2 block flex items-center gap-2"><Activity size={14}/> Qualité Vidéo</label>
+                                    <div className="flex gap-2">
+                                        {Object.keys(VIDEO_PROFILES).map((q) => (
+                                            <button 
+                                                key={q}
+                                                onClick={() => handleQualityChange(q as QualityPreset)}
+                                                className={`flex-1 py-2 rounded-xl text-sm font-bold border transition-all ${videoQuality === q ? 'bg-brand-500 border-brand-500 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'}`}
+                                            >
+                                                {q}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
                                 <div><label className="text-xs font-semibold text-gray-400 uppercase mb-2 block">Microphone</label><select value={selectedMic} onChange={(e) => switchMicrophone(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-sm">{mics.map(m => <option key={m.deviceId} value={m.deviceId}>{m.label}</option>)}</select></div>
                                 <div><label className="text-xs font-semibold text-gray-400 uppercase mb-2 block">Caméra</label><select value={selectedCam} onChange={(e) => switchCamera(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-sm">{cams.map(c => <option key={c.deviceId} value={c.deviceId}>{c.label}</option>)}</select></div>
                                 <div><label className="text-xs font-semibold text-gray-400 uppercase mb-2 block">Haut-parleur</label><select value={selectedSpeaker} onChange={(e) => switchSpeaker(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-sm">{speakers.map(s => <option key={s.deviceId} value={s.deviceId}>{s.label}</option>)}</select></div>

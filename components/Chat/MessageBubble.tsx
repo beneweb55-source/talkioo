@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, Reaction } from '../../types';
-import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon, SmilePlus, Plus, X, Smile, Play, Pause } from 'lucide-react';
+import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon, SmilePlus, Plus, X, Smile, Play, Pause, Phone, PhoneMissed, PhoneOff, PhoneIncoming, PhoneOutgoing } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../context/AuthContext';
 import EmojiPicker, { EmojiClickData, Theme } from 'emoji-picker-react';
@@ -193,6 +193,57 @@ const AudioMessagePlayer = ({ src, isOwn }: { src: string, isOwn: boolean }) => 
     );
 };
 
+// --- CALL LOG BUBBLE COMPONENT ---
+const CallLogBubble = ({ message, isOwn }: { message: Message, isOwn: boolean }) => {
+    let Icon = Phone;
+    let title = "Appel";
+    let subtext = message.content;
+    let iconColorClass = isOwn ? "text-white" : "text-gray-500 dark:text-gray-400";
+    let iconBgClass = isOwn ? "bg-white/20" : "bg-gray-200 dark:bg-gray-700";
+
+    switch (message.message_type) {
+        case 'call_missed':
+        case 'call_canceled':
+            Icon = PhoneMissed;
+            title = "Appel manqué";
+            if (!isOwn) {
+                iconColorClass = "text-red-500";
+                iconBgClass = "bg-red-100 dark:bg-red-900/30";
+            }
+            break;
+        case 'call_started':
+            title = "Appel vocal";
+            Icon = isOwn ? PhoneOutgoing : PhoneIncoming;
+            if (!isOwn) {
+                 iconColorClass = "text-green-500";
+                 iconBgClass = "bg-green-100 dark:bg-green-900/30";
+            }
+            break;
+        case 'call_ended':
+            Icon = PhoneOff;
+            title = "Appel terminé";
+            if (!isNaN(Number(message.content))) {
+                const duration = Number(message.content);
+                const m = Math.floor(duration / 60);
+                const s = duration % 60;
+                subtext = `${m} min ${s.toString().padStart(2, '0')} s`;
+            }
+            break;
+    }
+
+    return (
+        <div className="flex items-center gap-3 min-w-[140px] py-1">
+            <div className={`h-10 w-10 rounded-full flex items-center justify-center flex-shrink-0 ${iconBgClass} ${iconColorClass}`}>
+                <Icon size={20} />
+            </div>
+            <div>
+                <div className="font-bold text-sm leading-tight">{title}</div>
+                <div className={`text-xs ${isOwn ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>{subtext}</div>
+            </div>
+        </div>
+    );
+};
+
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, onEdit, onDelete, onReply, onReact, highlightTerm }) => {
   const { user } = useAuth();
   const isDeleted = !!message.deleted_at;
@@ -265,11 +316,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   const safeContent = message.content || "";
   const attachmentUrl = message.attachment_url || message.image_url;
   const isLegacyBase64 = safeContent.startsWith('data:image');
+  
   const isSticker = message.message_type === 'sticker';
   const isAudio = message.message_type === 'audio';
-  const isMedia = (!!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif') && !isSticker && !isAudio;
+  const isCall = ['call_missed', 'call_started', 'call_ended', 'call_canceled'].includes(message.message_type || '');
+  const isMedia = (!!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif') && !isSticker && !isAudio && !isCall;
   
-  const jumboClass = !isMedia && !isSticker && !isAudio && !isDeleted ? getJumboEmojiClass(safeContent) : null;
+  const jumboClass = !isMedia && !isSticker && !isAudio && !isCall && !isDeleted ? getJumboEmojiClass(safeContent) : null;
 
   const reactionData: { [emoji: string]: { count: number, hasReacted: boolean, users: string[] } } = {};
   let hasReactions = false;
@@ -373,7 +426,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                         {onReply && (
                             <button onClick={() => { onReply(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-brand-500 text-gray-400"><Reply size={15}/></button>
                         )}
-                        {isOwn && onEdit && !isMedia && !isSticker && !isAudio && (
+                        {isOwn && onEdit && !isMedia && !isSticker && !isAudio && !isCall && (
                              <button onClick={() => { onEdit(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-blue-500 text-gray-400"><Pencil size={14}/></button>
                         )}
                         {isOwn && onDelete && (
@@ -417,7 +470,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                     </button>
                  )}
                  
-                 {isOwn && onEdit && !isMedia && !isSticker && !isAudio && (
+                 {isOwn && onEdit && !isMedia && !isSticker && !isAudio && !isCall && (
                     <button onClick={(e) => { e.stopPropagation(); onEdit(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-blue-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Modifier">
                         <Pencil size={16} />
                     </button>
@@ -459,7 +512,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   <span className="flex items-center gap-1.5 text-sm opacity-80"><Trash2 size={12}/> Message supprimé</span>
               ) : (
                   <>
-                      {isSticker ? (
+                      {isCall ? (
+                          <CallLogBubble message={message} isOwn={isOwn} />
+                      ) : isSticker ? (
                         <div className="relative inline-block">
                             {!imgLoaded && !imgError && (
                                 <div className="absolute inset-0 flex items-center justify-center">

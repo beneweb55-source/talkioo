@@ -23,11 +23,16 @@ interface CallInterfaceProps {
 }
 
 // --- CONFIGURATION QUALITÉ ---
-const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+// Detect mobile using both UA and screen width for robustness
+const isMobileDevice = () => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < 768 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+};
 
 type QualityPreset = 'HD' | 'FHD' | '2K';
 
-const VIDEO_PROFILES: Record<QualityPreset, VideoEncoderConfiguration> = {
+// Using 'any' for VideoEncoderConfiguration to allow 'optimizationMode' which might be missing in strict types
+const VIDEO_PROFILES: Record<QualityPreset, any> = {
     'HD': { // 720p - Bonne balance mobile/desktop
         width: 1280, height: 720, frameRate: 30, bitrateMin: 1000, bitrateMax: 2000, optimizationMode: "motion" 
     },
@@ -68,6 +73,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const [remoteJoined, setRemoteJoined] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const constraintsRef = useRef<HTMLDivElement>(null); // For dragging constraints
+    const isMobile = isMobileDevice();
     
     // Core Agora
     const client = useRef<IAgoraRTCClient | null>(null);
@@ -139,8 +145,8 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             left: 0,
             right: 0,
             bottom: 0,
-            width: '100%',
-            height: '100dvh', // Modern mobile viewport unit
+            width: '100vw',
+            height: '100dvh', // Modern mobile viewport unit covers URL bar
             borderRadius: 0,
             x: 0,
             y: 0,
@@ -156,7 +162,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             right: 16,
             bottom: isMobile ? 100 : 24, 
             width: isMobile ? 120 : 320,
-            height: isMobile ? 180 : 180,
+            height: isMobile ? 180 : 180, // Vertical ratio for mobile
             borderRadius: 16,
             zIndex: 9999,
             scale: 1,
@@ -437,8 +443,8 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             <MotionDiv 
                 drag={isMinimized}
                 dragConstraints={constraintsRef}
-                dragElastic={0} // No elasticity to prevent resizing feel
-                dragMomentum={false} // Precise dropping
+                dragElastic={0} // ABSOLUTELY NO ELASTICITY
+                dragMomentum={false} // Precise dropping without inertia
                 initial="full"
                 animate={isMinimized ? "mini" : "full"}
                 variants={containerVariants}
@@ -446,6 +452,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 style={{ 
                     // Crucial: Use origin to prevent jumpy layout transitions
                     transformOrigin: isMinimized ? 'bottom right' : 'center center',
+                    // Border only in mini mode
                     border: isMinimized ? '1px solid rgba(255,255,255,0.1)' : 'none'
                 }}
             >

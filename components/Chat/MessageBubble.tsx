@@ -319,10 +319,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   
   const isSticker = message.message_type === 'sticker';
   const isAudio = message.message_type === 'audio';
-  const isCall = ['call_missed', 'call_started', 'call_ended', 'call_canceled'].includes(message.message_type || '');
-  const isMedia = (!!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif') && !isSticker && !isAudio && !isCall;
+  const isCallLog = ['call_missed', 'call_started', 'call_ended', 'call_canceled'].includes(message.message_type || '');
+  const isMedia = (!!attachmentUrl || isLegacyBase64 || message.message_type === 'image' || message.message_type === 'gif') && !isSticker && !isAudio && !isCallLog;
   
-  const jumboClass = !isMedia && !isSticker && !isAudio && !isCall && !isDeleted ? getJumboEmojiClass(safeContent) : null;
+  const jumboClass = !isMedia && !isSticker && !isAudio && !isCallLog && !isDeleted ? getJumboEmojiClass(safeContent) : null;
 
   const reactionData: { [emoji: string]: { count: number, hasReacted: boolean, users: string[] } } = {};
   let hasReactions = false;
@@ -350,6 +350,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       setShowReactionMenu(false);
   };
 
+  // Optimization: Call Log Bubbles should be slim and compact to prevent spam
+  const bubblePaddingClass = isCallLog 
+    ? 'p-1.5 px-3' // Very compact for calls
+    : (jumboClass || isSticker ? '' : 'px-4 py-2.5'); // Standard for others
+
   // Sticker container should be transparent and borderless
   const bubbleClasses = isSticker 
     ? 'bg-transparent shadow-none border-none p-0' 
@@ -365,8 +370,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         layout
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        /* Increase bottom margin if reactions exist to avoid overlap with next message */
-        className={`flex w-full ${hasReactions ? 'mb-8' : 'mb-3'} ${isOwn ? 'justify-end' : 'justify-start'} group relative select-none md:select-text`}
+        /* Reduce bottom margin for call logs to group them visually */
+        className={`flex w-full ${hasReactions ? 'mb-8' : (isCallLog ? 'mb-1.5' : 'mb-3')} ${isOwn ? 'justify-end' : 'justify-start'} group relative select-none md:select-text`}
         onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
         style={{ zIndex: showReactionMenu || showFullPicker || clickedReactionEmoji ? 50 : 10 }}
     >
@@ -383,7 +388,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       >
         <div className={`relative flex flex-col min-w-[5rem]
             ${bubbleClasses} 
-            ${isDeleted ? 'opacity-80 italic px-4 py-2.5' : (jumboClass || isSticker ? '' : 'px-4 py-2.5')}`}
+            ${isDeleted ? 'opacity-80 italic px-4 py-2.5' : bubblePaddingClass}`}
         >
           {/* --- MODERN REACTION MENU --- */}
           <AnimatePresence>
@@ -426,7 +431,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                         {onReply && (
                             <button onClick={() => { onReply(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-brand-500 text-gray-400"><Reply size={15}/></button>
                         )}
-                        {isOwn && onEdit && !isMedia && !isSticker && !isAudio && !isCall && (
+                        {isOwn && onEdit && !isMedia && !isSticker && !isAudio && !isCallLog && (
                              <button onClick={() => { onEdit(message); setShowReactionMenu(false); }} className="p-1.5 hover:text-blue-500 text-gray-400"><Pencil size={14}/></button>
                         )}
                         {isOwn && onDelete && (
@@ -470,7 +475,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                     </button>
                  )}
                  
-                 {isOwn && onEdit && !isMedia && !isSticker && !isAudio && !isCall && (
+                 {isOwn && onEdit && !isMedia && !isSticker && !isAudio && !isCallLog && (
                     <button onClick={(e) => { e.stopPropagation(); onEdit(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-blue-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Modifier">
                         <Pencil size={16} />
                     </button>
@@ -501,7 +506,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
               </div>
           )}
 
-          {!isOwn && !isDeleted && !jumboClass && !isSticker && (
+          {!isOwn && !isDeleted && !jumboClass && !isSticker && !isCallLog && (
             <div className="text-[10px] font-bold text-brand-600 dark:text-brand-400 mb-1 uppercase tracking-wide">
               {message.sender_username}
             </div>
@@ -512,7 +517,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   <span className="flex items-center gap-1.5 text-sm opacity-80"><Trash2 size={12}/> Message supprimé</span>
               ) : (
                   <>
-                      {isCall ? (
+                      {isCallLog ? (
                           <CallLogBubble message={message} isOwn={isOwn} />
                       ) : isSticker ? (
                         <div className="relative inline-block">
@@ -587,7 +592,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                     ? 'text-gray-500 dark:text-gray-400' 
                     : (isOwn ? 'text-brand-100' : 'text-gray-400')
                   } 
-                  ${jumboClass ? 'px-2 pb-1' : ''}
+                  ${jumboClass || isCallLog ? 'px-2 pb-1' : ''}
               `}>
                 {isEdited && <span className="text-[10px] opacity-80">modifié</span>}
                 <span className="text-[10px] opacity-80 whitespace-nowrap">
@@ -602,7 +607,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
           )}
 
           {!isDeleted && (
-            <div className={`flex flex-wrap gap-1.5 mt-2 -mb-5 relative z-20 ${jumboClass || isSticker ? 'mt-0 px-2' : ''}`}>
+            <div className={`flex flex-wrap gap-1.5 mt-2 -mb-5 relative z-20 ${jumboClass || isSticker || isCallLog ? 'mt-0 px-2' : ''}`}>
               {Object.entries(reactionData).map(([emoji, { count, hasReacted, users }]) => (
                 <div key={emoji} className="relative">
                     <MotionDiv

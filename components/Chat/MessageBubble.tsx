@@ -221,7 +221,7 @@ const CallLogBubble = ({ message, isOwn }: { message: Message, isOwn: boolean })
             break;
         case 'call_ended':
             Icon = PhoneOff;
-            title = "Appel terminé";
+            title = "Terminé";
             if (!isNaN(Number(message.content))) {
                 const duration = Number(message.content);
                 const m = Math.floor(duration / 60);
@@ -232,13 +232,13 @@ const CallLogBubble = ({ message, isOwn }: { message: Message, isOwn: boolean })
     }
 
     return (
-        <div className="flex items-center gap-3 min-w-[140px] py-1">
-            <div className={`h-10 w-10 rounded-full flex items-center justify-center flex-shrink-0 ${iconBgClass} ${iconColorClass}`}>
-                <Icon size={20} />
+        <div className="flex items-center gap-2.5 min-w-[120px] py-0.5">
+            <div className={`h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 ${iconBgClass} ${iconColorClass}`}>
+                <Icon size={16} />
             </div>
             <div>
-                <div className="font-bold text-sm leading-tight">{title}</div>
-                <div className={`text-xs ${isOwn ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>{subtext}</div>
+                <div className="font-bold text-xs leading-tight">{title}</div>
+                <div className={`text-[10px] ${isOwn ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>{subtext}</div>
             </div>
         </div>
     );

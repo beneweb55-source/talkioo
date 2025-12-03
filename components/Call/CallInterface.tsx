@@ -26,22 +26,23 @@ interface CallInterfaceProps {
 // --- CONFIGURATION ---
 const isMobile = window.innerWidth < 768;
 
+// Config stricte pour forcer la qualité et la stabilité
 const CAMERA_ENCODER_CONFIG: any = isMobile ? {
     width: { ideal: 1280, min: 640 },
     height: { ideal: 720, min: 480 },
-    frameRate: { min: 30, max: 60, ideal: 60 },
-    bitrateMin: 1500, bitrateMax: 3000,
+    frameRate: { min: 30, max: 60, ideal: 30 },
+    bitrateMin: 800, bitrateMax: 2000,
     optimizationMode: "motion"
 } : {
     width: { ideal: 1920, min: 1280 },
     height: { ideal: 1080, min: 720 },
     frameRate: { min: 30, max: 60, ideal: 60 },
-    bitrateMin: 3000, bitrateMax: 6000,
+    bitrateMin: 2000, bitrateMax: 6000,
     optimizationMode: "motion"
 };
 
 const SCREEN_SHARE_PROFILES = {
-    HD: { width: 1280, height: 720, frameRate: 60, bitrate: 3000 },
+    HD: { width: 1280, height: 720, frameRate: 30, bitrate: 3000 },
     FHD: { width: 1920, height: 1080, frameRate: 60, bitrate: 5000 },
     '2K': { width: 2560, height: 1440, frameRate: 60, bitrate: 7000 },
     '2K+': { width: 3840, height: 2160, frameRate: 60, bitrate: 9000 }
@@ -51,17 +52,17 @@ type ScreenQuality = keyof typeof SCREEN_SHARE_PROFILES;
 
 interface DeviceInfo { label: string; deviceId: string; }
 
-// Structure unifiée pour gérer Local et Remote de la même façon dans la grille
 interface Participant {
-    id: string | number; // UID Agora
+    id: string | number;
     username: string;
     avatarUrl?: string;
     isLocal: boolean;
     hasVideo: boolean;
     hasAudio: boolean;
-    videoTrack?: ICameraVideoTrack | ILocalVideoTrack | any; // Type 'any' pour remote track compatibilité
+    videoTrack?: ICameraVideoTrack | ILocalVideoTrack | any;
     audioTrack?: IMicrophoneAudioTrack | any;
-    isSpeaking: boolean; // VAD
+    isSpeaking: boolean;
+    joinedAt: number;
 }
 
 export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, currentUser, targetUser, isCaller, callType, onClose }) => {
@@ -74,10 +75,13 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const localVideoTrack = useRef<ICameraVideoTrack | null>(null);
     const localScreenTrack = useRef<ILocalVideoTrack | null>(null);
     
+    // UI Layout Refs
+    const containerRef = useRef<HTMLDivElement>(null);
+    
     // Audio Elements
     const ringbackRef = useRef<HTMLAudioElement | null>(null);
 
-    // Participants State (Local + Remotes combined for UI)
+    // Participants State
     const [localParticipant, setLocalParticipant] = useState<Participant>({
         id: currentUser.id,
         username: 'Moi',
@@ -85,17 +89,21 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         isLocal: true,
         hasVideo: callType === 'video',
         hasAudio: true,
-        isSpeaking: false
+        isSpeaking: false,
+        joinedAt: Date.now()
     });
     
-    // Map of remote participants
     const [remoteParticipants, setRemoteParticipants] = useState<Participant[]>([]);
 
     // UI Controls
     const [isMuted, setIsMuted] = useState(false);
     const [isVideoEnabled, setIsVideoEnabled] = useState(callType === 'video');
     const [isScreenSharing, setIsScreenSharing] = useState(false);
+    
+    // Window State
     const [isMinimized, setIsMinimized] = useState(false);
+    const [isTransitioning, setIsTransitioning] = useState(false); 
+    
     const [showQualityMenu, setShowQualityMenu] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [callStatus, setCallStatus] = useState(isCaller ? 'Sonnerie en cours...' : 'Connexion...');
@@ -108,6 +116,16 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const [selectedMic, setSelectedMic] = useState('');
     const [selectedCam, setSelectedCam] = useState('');
     const [selectedSpeaker, setSelectedSpeaker] = useState('');
+
+    // --- RESIZE OBSERVER ---
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const resizeObserver = new ResizeObserver(() => {
+            // Trigger UI update if necessary, mostly handled by CSS grid
+        });
+        resizeObserver.observe(containerRef.current);
+        return () => resizeObserver.disconnect();
+    }, []);
 
     // --- AUTO-MUTE BACKGROUND (PERFORMANCE) ---
     useEffect(() => {
@@ -171,25 +189,21 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 const { token, appId } = await getAgoraTokenAPI(conversationId);
                 client.current = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
 
-                // --- EVENT LISTENERS ---
-
-                // User Published (Video/Audio)
                 client.current.on('user-published', async (user, mediaType) => {
                     await client.current?.subscribe(user, mediaType);
-                    
                     setRemoteParticipants(prev => {
                         const existing = prev.find(p => p.id === user.uid);
-                        // Default remote user structure
                         const newUser = existing || {
                             id: user.uid,
-                            username: targetUser?.username || `User ${user.uid}`,
-                            avatarUrl: targetUser?.avatar_url || undefined,
+                            username: targetUser?.id === user.uid ? targetUser.username : `User ${user.uid}`,
+                            avatarUrl: targetUser?.id === user.uid ? (targetUser.avatar_url || undefined) : undefined,
                             isLocal: false,
                             hasVideo: user.hasVideo,
                             hasAudio: user.hasAudio,
                             videoTrack: user.videoTrack,
                             audioTrack: user.audioTrack,
-                            isSpeaking: false
+                            isSpeaking: false,
+                            joinedAt: Date.now()
                         };
 
                         if (mediaType === 'video') {
@@ -200,12 +214,10 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                             newUser.hasAudio = true;
                             user.audioTrack?.play();
                         }
-                        
                         return existing ? prev.map(p => p.id === user.uid ? newUser : p) : [...prev, newUser];
                     });
                 });
 
-                // User Unpublished (Mute/Disable)
                 client.current.on('user-unpublished', (user, mediaType) => {
                      setRemoteParticipants(prev => prev.map(p => p.id === user.uid ? {
                         ...p,
@@ -213,7 +225,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                     } : p));
                 });
 
-                // User Left
                 client.current.on('user-left', (user) => {
                     setRemoteParticipants(prev => prev.filter(p => p.id !== user.uid));
                     if (client.current?.remoteUsers.length === 0) {
@@ -232,37 +243,39 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 // --- VOLUME INDICATOR (VAD) ---
                 client.current.enableAudioVolumeIndicator();
                 client.current.on("volume-indicator", volumes => {
-                    volumes.forEach((volume) => {
-                        const threshold = 5; // Sensitivity
-                        // Local
-                        if (volume.uid === currentUser.id || volume.uid === 0) {
-                             setLocalParticipant(prev => ({...prev, isSpeaking: volume.level > threshold}));
-                        } 
-                        // Remote
-                        else {
-                            setRemoteParticipants(prev => prev.map(p => p.id === volume.uid ? {...p, isSpeaking: volume.level > threshold} : p));
+                    const threshold = 5; 
+                    
+                    volumes.forEach(volume => {
+                        const isSpeaking = volume.level > threshold;
+                        if (volume.uid === 0 || volume.uid === currentUser.id) {
+                            setLocalParticipant(prev => (prev.isSpeaking !== isSpeaking ? { ...prev, isSpeaking } : prev));
+                        } else {
+                            setRemoteParticipants(prev => {
+                                const index = prev.findIndex(p => p.id === volume.uid);
+                                if (index !== -1 && prev[index].isSpeaking !== isSpeaking) {
+                                    const newArr = [...prev];
+                                    newArr[index] = { ...newArr[index], isSpeaking };
+                                    return newArr;
+                                }
+                                return prev;
+                            });
                         }
                     });
                 });
 
                 client.current.on('network-quality', (stats) => setNetworkQuality(stats.downlinkNetworkQuality));
 
-                // --- JOIN & PUBLISH ---
                 await client.current.join(appId, conversationId, token, currentUser.id);
 
-                // Create Local Tracks
                 localAudioTrack.current = await AgoraRTC.createMicrophoneAudioTrack();
                 if(selectedMic) await localAudioTrack.current.setDevice(selectedMic);
-                
                 await client.current.publish(localAudioTrack.current);
                 setLocalParticipant(p => ({...p, audioTrack: localAudioTrack.current, hasAudio: true}));
 
                 if (callType === 'video') {
                     localVideoTrack.current = await AgoraRTC.createCameraVideoTrack({ encoderConfig: CAMERA_ENCODER_CONFIG });
                     if(selectedCam) await localVideoTrack.current.setDevice(selectedCam);
-                    
                     await client.current.publish(localVideoTrack.current);
-                    
                     setLocalParticipant(p => ({...p, videoTrack: localVideoTrack.current, hasVideo: true}));
                     setIsVideoEnabled(true);
                 }
@@ -277,12 +290,19 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
 
         initCall();
 
+        // --- CLEANUP ---
         return () => {
             if (ringbackRef.current) ringbackRef.current.pause();
+            localAudioTrack.current?.stop();
             localAudioTrack.current?.close();
+            localVideoTrack.current?.stop();
             localVideoTrack.current?.close();
+            localScreenTrack.current?.stop();
             localScreenTrack.current?.close();
-            client.current?.leave();
+            if (client.current) {
+                client.current.leave();
+                client.current.removeAllListeners();
+            }
         };
     }, []);
 
@@ -308,6 +328,13 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             setLocalParticipant(p => ({...p, videoTrack: localVideoTrack.current, hasVideo: true}));
             setIsVideoEnabled(true);
         }
+    };
+
+    const toggleMinimize = () => {
+        if (isTransitioning) return;
+        setIsTransitioning(true);
+        setIsMinimized(!isMinimized);
+        setTimeout(() => setIsTransitioning(false), 500);
     };
 
     const startScreenShare = async (quality: ScreenQuality) => {
@@ -352,32 +379,50 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const endCall = () => { if (targetUser) sendCallSignal('reject', { conversationId, targetId: targetUser.id, userId: currentUser.id }); onClose(); };
     const getNetworkIcon = () => { if (networkQuality > 4) return <Signal size={16} className="text-red-500" />; if (networkQuality > 2) return <Signal size={16} className="text-yellow-500" />; return <Signal size={16} className="text-green-500" />; };
 
-    // --- GRID COMPUTATION ---
+    // --- SMART GRID COMPUTATION ---
     const allParticipants = useMemo(() => {
-        // Only show remote users if they have joined (unless waiting screen)
         if (!remoteJoined) return [];
-        return [localParticipant, ...remoteParticipants];
+        // Keep order stable (by join time/ID) to avoid tiles jumping around
+        return [localParticipant, ...remoteParticipants]; 
     }, [localParticipant, remoteParticipants, remoteJoined]);
 
-    // Grid CSS class generator
+    // Responsive Grid Logic - Supports 10+ participants
     const getGridClass = (count: number) => {
-        if (count <= 1) return 'grid-cols-1 grid-rows-1';
-        if (count === 2) return 'grid-cols-1 md:grid-cols-2'; // Stack on mobile, side-by-side on desktop
-        if (count <= 4) return 'grid-cols-2 grid-rows-2';
-        return 'grid-cols-3';
+        // MOBILE (< 768px)
+        if (isMobile) {
+            if (count <= 1) return 'grid-cols-1';
+            if (count <= 2) return 'grid-cols-1'; // Stacked vertical
+            if (count <= 4) return 'grid-cols-2'; // 2x2
+            return 'grid-cols-2'; // Fixed 2 cols, scrolls vertical for 5+
+        }
+        // DESKTOP
+        if (count <= 1) return 'grid-cols-1';
+        if (count <= 2) return 'grid-cols-2';
+        if (count <= 4) return 'grid-cols-2'; // 2x2
+        if (count <= 6) return 'grid-cols-3'; // 2x3
+        if (count <= 9) return 'grid-cols-3'; // 3x3
+        if (count <= 12) return 'grid-cols-4'; // 3x4
+        return 'grid-cols-5'; // 5 cols for mass meetings
     };
 
     // --- MINI PLAYER RENDER ---
     if (isMinimized) {
         return (
-            <MotionDiv drag dragMomentum={false} initial={{ scale: 0 }} animate={{ scale: 1 }} className="fixed bottom-24 right-4 z-[100] w-32 h-48 bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden flex flex-col cursor-pointer" onClick={() => setIsMinimized(false)}>
+            <MotionDiv 
+                drag 
+                dragMomentum={false} 
+                initial={{ scale: 0 }} 
+                animate={{ scale: 1 }} 
+                className={`fixed bottom-24 right-4 z-[100] w-36 h-56 bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden flex flex-col cursor-pointer ${isTransitioning ? 'pointer-events-none' : ''}`} 
+                onClick={toggleMinimize}
+            >
                  <div className="flex-1 relative bg-black">
                      {remoteJoined && remoteParticipants.length > 0 ? (
                          <Tile participant={remoteParticipants[0]} isMini={true} />
                      ) : (
                          <div className="w-full h-full flex items-center justify-center"><UserIcon className="text-gray-500"/></div>
                      )}
-                     <div className="absolute top-2 right-2 w-8 h-12 bg-gray-800 rounded border border-white/20 overflow-hidden">
+                     <div className="absolute top-2 right-2 w-10 h-14 bg-gray-800 rounded border border-white/20 overflow-hidden shadow-lg">
                         <Tile participant={localParticipant} isMini={true} />
                      </div>
                  </div>
@@ -390,12 +435,12 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             
             {/* --- HEADER --- */}
             <div className="absolute top-0 left-0 right-0 p-4 z-20 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent pointer-events-none">
-                <div className="pointer-events-auto flex items-center gap-3 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/10">
-                    <button onClick={() => setIsMinimized(true)} className="hover:text-gray-300"><Minimize2 size={18}/></button>
+                <div className={`pointer-events-auto flex items-center gap-3 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 ${isTransitioning ? 'pointer-events-none' : ''}`}>
+                    <button onClick={toggleMinimize} className="hover:text-gray-300"><Minimize2 size={18}/></button>
                     <div className="w-[1px] h-4 bg-white/20"></div>
                     <div>
                         <h2 className="font-bold text-sm leading-none flex items-center gap-2">
-                            {targetUser?.username || 'Appel'}
+                            {targetUser?.username || (remoteParticipants.length > 0 ? `${remoteParticipants.length + 1} Participants` : 'Appel')}
                             {remoteJoined && <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>}
                         </h2>
                         <span className="text-[10px] text-gray-400 flex items-center gap-1">{getNetworkIcon()} {callStatus}</span>
@@ -423,7 +468,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             </AnimatePresence>
 
             {/* --- MAIN GRID STAGE --- */}
-            <div className="flex-1 w-full h-full relative p-2 md:p-4 flex items-center justify-center overflow-hidden">
+            <div ref={containerRef} className="flex-1 w-full h-full relative p-2 md:p-4 flex flex-col items-center justify-center overflow-hidden">
                 {!remoteJoined ? (
                     // WAITING SCREEN
                     <div className="flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
@@ -431,23 +476,27 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                             <div className="h-32 w-32 md:h-40 md:w-40 rounded-full bg-gray-800 p-1 ring-4 ring-white/5 relative z-10 overflow-hidden shadow-2xl">
                                 {targetUser?.avatar_url ? <img src={targetUser.avatar_url} className="w-full h-full rounded-full object-cover" /> : <div className="w-full h-full rounded-full bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center text-4xl font-bold">{targetUser?.username?.[0]}</div>}
                             </div>
-                            <div className="absolute inset-0 rounded-full bg-brand-500/20 animate-ping" />
                         </div>
                         <h3 className="text-2xl font-bold mb-2">Appel en cours...</h3>
                         <p className="text-gray-400 text-sm">En attente de réponse</p>
                     </div>
                 ) : (
-                    // ACTIVE GRID
-                    <div className={`grid gap-2 md:gap-4 w-full h-full max-w-7xl max-h-[85vh] transition-all duration-500 ease-in-out ${getGridClass(allParticipants.length)}`}>
+                    // ACTIVE GRID (SCROLLABLE IF NEEDED)
+                    <div className={`
+                        grid gap-2 w-full h-full max-w-[1600px] transition-all duration-300 ease-in-out overflow-y-auto content-center
+                        ${getGridClass(allParticipants.length)}
+                    `} style={{ maxHeight: '85vh' }}>
                         {allParticipants.map(participant => (
-                            <Tile key={participant.id} participant={participant} />
+                            <div key={participant.id} className="min-h-[180px] md:min-h-[220px]">
+                                <Tile participant={participant} />
+                            </div>
                         ))}
                     </div>
                 )}
             </div>
 
             {/* --- CONTROLS DOCK --- */}
-            <div className="flex justify-center pb-6 pt-4 w-full z-40">
+            <div className="flex justify-center pb-6 pt-4 w-full z-40 bg-gradient-to-t from-black via-black/80 to-transparent">
                 <div className="flex items-center gap-3 px-6 py-3 bg-gray-900/90 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl">
                     <ControlBtn active={!isMuted} onClick={toggleMute} onIcon={<Mic size={20}/>} offIcon={<MicOff size={20}/>} />
                     <ControlBtn active={isVideoEnabled} onClick={toggleVideo} onIcon={<Video size={20}/>} offIcon={<VideoOff size={20}/>} />
@@ -480,50 +529,54 @@ const ControlBtn = ({ active, onClick, onIcon, offIcon, className = '' }: any) =
 );
 
 const Tile = ({ participant, isMini = false }: { participant: Participant, isMini?: boolean }) => {
-    // Refs for Agora play
     const videoRef = useRef<HTMLDivElement>(null);
 
+    // Robust Track Playing
     useEffect(() => {
         if (videoRef.current && participant.videoTrack) {
-            participant.videoTrack.play(videoRef.current);
+            try {
+                // Ensure no ghost tracks on re-render
+                participant.videoTrack.play(videoRef.current);
+            } catch(e) { console.error("Error playing track", e); }
         }
-    }, [participant.videoTrack]);
+    }, [participant.videoTrack, isMini]); 
+
+    // Visual Feedback for Voice Activity (Solid green border, no pulsing animation)
+    const activeBorderClass = participant.isSpeaking && !isMini 
+        ? 'border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.6)] ring-1 ring-green-500' 
+        : 'border-white/5';
 
     return (
-        <div className={`relative w-full h-full bg-gray-800 rounded-2xl overflow-hidden shadow-lg border transition-all duration-300 ${participant.isSpeaking && !isMini ? 'border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.3)] ring-1 ring-green-500' : 'border-white/5'}`}>
+        <div className={`relative w-full h-full bg-gray-800 rounded-2xl overflow-hidden shadow-lg border transition-all duration-150 ${activeBorderClass}`}>
             {/* Video Layer */}
             {participant.hasVideo ? (
                 <div ref={videoRef} className="w-full h-full [&>div]:!w-full [&>div]:!h-full [&>video]:!object-cover" />
             ) : (
-                // Avatar Fallback (Audio Only)
+                // Audio Only Fallback
                 <div className="w-full h-full flex flex-col items-center justify-center bg-gray-900 relative p-4">
-                    {/* Audio Wave Animation */}
-                    {participant.isSpeaking && !isMini && (
-                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 bg-green-500/20 rounded-full animate-ping" />
-                    )}
-                    
-                    <div className={`relative z-10 rounded-full bg-gray-700 overflow-hidden border-4 border-gray-800 shadow-xl ${isMini ? 'w-10 h-10' : 'w-24 h-24 md:w-32 md:h-32'}`}>
+                    <div className={`relative z-10 rounded-full bg-gray-700 overflow-hidden border-4 border-gray-800 shadow-xl ${isMini ? 'w-10 h-10' : 'w-20 h-20 md:w-28 md:h-28'}`}>
                         {participant.avatarUrl ? <img src={participant.avatarUrl} className="w-full h-full object-cover"/> : <div className="w-full h-full flex items-center justify-center text-gray-400 font-bold text-2xl">{participant.username[0]}</div>}
                     </div>
-                    {!isMini && <p className="mt-4 font-bold text-lg text-gray-200">{participant.username}</p>}
+                    {/* Speaking visualizer - Static Glow if needed, but removed pulse */}
+                    {!isMini && <p className="mt-4 font-bold text-sm md:text-lg text-gray-200 truncate max-w-[90%] text-center">{participant.username}</p>}
                 </div>
             )}
 
             {/* Overlays */}
             {!isMini && (
-                <div className="absolute bottom-4 left-4 flex gap-2 pointer-events-none">
-                    <div className="bg-black/40 backdrop-blur-md px-3 py-1 rounded-lg flex items-center gap-2 border border-white/10">
-                        {participant.isSpeaking && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"/>}
-                        <span className="text-xs font-bold text-white shadow-sm">{participant.username} {participant.isLocal && '(Vous)'}</span>
+                <div className="absolute bottom-3 left-3 flex gap-2 pointer-events-none max-w-[85%]">
+                    <div className="bg-black/40 backdrop-blur-md px-2.5 py-1 rounded-lg flex items-center gap-2 border border-white/10 overflow-hidden">
+                        {participant.isSpeaking && <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"/>}
+                        <span className="text-xs font-bold text-white shadow-sm truncate">{participant.username} {participant.isLocal && '(Vous)'}</span>
                     </div>
-                    {!participant.hasAudio && <div className="bg-red-500/80 backdrop-blur-md p-1.5 rounded-lg text-white"><MicOff size={14}/></div>}
+                    {!participant.hasAudio && <div className="bg-red-500/80 backdrop-blur-md p-1 rounded-lg text-white flex-shrink-0"><MicOff size={12}/></div>}
                 </div>
             )}
             
-            {/* Status Icons if No Video */}
+            {/* Status Icons */}
             {!participant.hasVideo && !isMini && (
-                <div className="absolute top-4 right-4 bg-black/40 backdrop-blur-md px-2 py-1 rounded text-xs text-gray-300 border border-white/5 flex items-center gap-1">
-                   <VideoOff size={12}/> Caméra off
+                <div className="absolute top-3 right-3 bg-black/40 backdrop-blur-md px-2 py-1 rounded text-[10px] text-gray-300 border border-white/5 flex items-center gap-1">
+                   <VideoOff size={10}/> Caméra off
                 </div>
             )}
         </div>

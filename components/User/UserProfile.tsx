@@ -4,7 +4,7 @@ import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI
 import { User } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { X, Camera, Palette, Unlock, Loader2, Check, MessageCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, Camera, Palette, Unlock, Loader2, Check, MessageCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MotionDiv = motion.div as any;
@@ -22,19 +22,17 @@ const PRIMARY_PRESETS = [
     { color: '#22c55e', name: 'Vert' },
 ];
 
-// Palette étendue pour éviter le sélecteur complexe sur mobile
-const EXTENDED_PALETTE = [
-    // Rouges / Roses
-    '#ef4444', '#f43f5e', '#d946ef', '#c026d3', '#be123c',
-    // Bleus / Cyans
-    '#0ea5e9', '#06b6d4', '#2563eb', '#4f46e5', '#1e40af',
-    // Verts / Teals
-    '#10b981', '#14b8a6', '#84cc16', '#15803d', '#0f766e',
-    // Oranges / Jaunes
-    '#f59e0b', '#eab308', '#d97706', '#ea580c', '#7c2d12',
-    // Gris / Neutres
-    '#64748b', '#71717a', '#525252', '#0f172a', '#000000',
-];
+// Helper pour HSL -> Hex
+function hslToHex(h: number, s: number, l: number) {
+  l /= 100;
+  const a = s * Math.min(l, 1 - l) / 100;
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
 
 export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const { user, login, applyTheme } = useAuth();
@@ -44,12 +42,10 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
   const [email, setEmail] = useState(user?.email || '');
   const [themeColor, setThemeColor] = useState(user?.theme_color || '#f97316');
   
-  // State pour afficher/masquer la grande palette
-  const [showExtendedPalette, setShowExtendedPalette] = useState(false);
-  
   const [selectedAvatar, setSelectedAvatar] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(user?.avatar_url || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const spectrumRef = useRef<HTMLDivElement>(null);
   
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -91,6 +87,18 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
       if (updatedUser) login(updatedUser, localStorage.getItem('talkio_auth_token') || '');
       setMessage({ text: "Profil mis à jour !", type: 'success' });
     } catch (err: any) { setMessage({ text: err.message, type: 'error' }); } finally { setIsLoading(false); }
+  };
+
+  const handleSpectrumInteraction = (e: React.MouseEvent | React.TouchEvent) => {
+      if (!spectrumRef.current) return;
+      const rect = spectrumRef.current.getBoundingClientRect();
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      let x = clientX - rect.left;
+      x = Math.max(0, Math.min(x, rect.width));
+      const hue = Math.floor((x / rect.width) * 360);
+      const color = hslToHex(hue, 100, 50);
+      setThemeColor(color);
+      applyTheme(color);
   };
 
   const handleSaveTheme = async () => {
@@ -158,56 +166,37 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
                   <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-5">Choisissez votre couleur</h3>
                   
                   {/* Primary Presets Grid */}
-                  <div className="flex flex-wrap justify-center gap-4 mb-4">
+                  <div className="flex flex-wrap justify-center gap-4 mb-6">
                       {PRIMARY_PRESETS.map(preset => (
                           <button 
                             key={preset.color} 
-                            onClick={() => { setThemeColor(preset.color); applyTheme(preset.color); setShowExtendedPalette(false); }}
-                            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 relative shadow-sm ${themeColor === preset.color && !showExtendedPalette ? 'scale-110 ring-2 ring-offset-2 ring-brand-500 dark:ring-offset-gray-900' : 'hover:scale-105'}`}
+                            onClick={() => { setThemeColor(preset.color); applyTheme(preset.color); }}
+                            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 relative shadow-sm ${themeColor === preset.color ? 'scale-110 ring-2 ring-offset-2 ring-brand-500 dark:ring-offset-gray-900' : 'hover:scale-105'}`}
                             style={{ backgroundColor: preset.color }}
                             title={preset.name}
                           >
-                              {themeColor === preset.color && !showExtendedPalette && <Check size={20} className="text-white drop-shadow-md" strokeWidth={3} />}
+                              {themeColor === preset.color && <Check size={20} className="text-white drop-shadow-md" strokeWidth={3} />}
                           </button>
                       ))}
-
-                      {/* Extended Palette Toggle Button (Rainbow) */}
-                      <button 
-                        onClick={() => setShowExtendedPalette(!showExtendedPalette)}
-                        className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 relative shadow-sm bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-600 ${showExtendedPalette ? 'ring-2 ring-offset-2 ring-gray-400 dark:ring-offset-gray-900' : 'hover:scale-105'}`}
-                        title="Plus de couleurs"
-                      >
-                          {showExtendedPalette ? <ChevronUp size={20} className="text-white" /> : <ChevronDown size={20} className="text-white" />}
-                      </button>
                   </div>
 
-                  {/* Extended Palette Dropdown */}
-                  <AnimatePresence>
-                    {showExtendedPalette && (
-                        <MotionDiv 
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="w-full overflow-hidden"
-                        >
-                            <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl mb-4 border border-gray-100 dark:border-gray-800">
-                                <p className="text-xs text-center text-gray-500 mb-3 font-medium uppercase tracking-wider">Toutes les nuances</p>
-                                <div className="grid grid-cols-5 gap-3 justify-items-center">
-                                    {EXTENDED_PALETTE.map(color => (
-                                        <button
-                                            key={color}
-                                            onClick={() => { setThemeColor(color); applyTheme(color); }}
-                                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-transform hover:scale-110 shadow-sm ${themeColor === color ? 'ring-2 ring-offset-1 ring-gray-400 scale-110' : ''}`}
-                                            style={{ backgroundColor: color }}
-                                        >
-                                            {themeColor === color && <Check size={16} className="text-white" strokeWidth={3} />}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        </MotionDiv>
-                    )}
-                  </AnimatePresence>
+                  {/* Rectangular Spectrum Palette */}
+                  <div className="w-full mb-4">
+                      <p className="text-xs text-center text-gray-500 mb-2 font-medium uppercase tracking-wider">Personnaliser</p>
+                      <div 
+                        ref={spectrumRef}
+                        className="h-12 w-full rounded-xl cursor-crosshair shadow-inner relative overflow-hidden"
+                        style={{ 
+                            background: 'linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)'
+                        }}
+                        onMouseDown={handleSpectrumInteraction}
+                        onMouseMove={(e) => e.buttons === 1 && handleSpectrumInteraction(e)}
+                        onTouchStart={handleSpectrumInteraction}
+                        onTouchMove={handleSpectrumInteraction}
+                      >
+                          {/* Optional Indicator for selected color if needed, but the live preview is better */}
+                      </div>
+                  </div>
               </div>
 
               {/* Live Preview Card */}

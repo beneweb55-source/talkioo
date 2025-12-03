@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
 import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates, sendCallSignal, getGroupMembers } from '../../services/api';
@@ -18,9 +19,10 @@ interface ChatWindowProps {
   onBack?: () => void;
   onlineUsers: Set<string>;
   contacts: User[];
+  isCallActive?: boolean;
 }
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUser, onBack, onlineUsers, contacts }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUser, onBack, onlineUsers, contacts, isCallActive }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -495,6 +497,25 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
   return (
     <div className="flex flex-col relative bg-[#e5ddd5] dark:bg-[#0b141a]" style={{ height: viewportHeight }}>
         <div className="absolute inset-0 z-0 opacity-[0.06] dark:opacity-[0.03] pointer-events-none" style={{ backgroundImage: "url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70fcded21.png')" }}></div>
+        
+        {/* --- ACTIVE CALL BANNER --- */}
+        <AnimatePresence>
+            {isCallActive && (
+                <MotionDiv 
+                    initial={{ height: 0, opacity: 0 }} 
+                    animate={{ height: 'auto', opacity: 1 }} 
+                    exit={{ height: 0, opacity: 0 }}
+                    className="bg-green-500 text-white text-xs font-bold px-4 py-1.5 text-center shadow-md z-30 flex justify-center items-center gap-2 cursor-pointer relative"
+                    onClick={() => {
+                        // Normally this would expand the call window if minimized, but for now it's just an indicator
+                    }}
+                >
+                    <span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>
+                    En cours d'appel...
+                </MotionDiv>
+            )}
+        </AnimatePresence>
+
         <AnimatePresence>
             {isDetailsOpen && (
                 <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">

@@ -57,7 +57,7 @@ export interface Message {
   sender_username?: string;
   sender_avatar?: string;
   read_count?: number;
-  message_type?: 'text' | 'image' | 'video' | 'audio' | 'gif' | 'sticker';
+  message_type?: 'text' | 'image' | 'video' | 'audio' | 'gif' | 'sticker' | 'call_missed' | 'call_started' | 'call_ended' | 'call_canceled';
   attachment_url?: string;
   image_url?: string; // Fallback for backward compatibility
   reactions?: Reaction[]; // New: List of reactions

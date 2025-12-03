@@ -1,9 +1,10 @@
+
 import React, { useEffect, useRef, useState, useMemo, useLayoutEffect } from 'react';
 import AgoraRTC, { 
     IAgoraRTCClient, ICameraVideoTrack, IMicrophoneAudioTrack, ILocalVideoTrack
 } from 'agora-rtc-sdk-ng';
 import { User } from '../../types';
-import { getAgoraTokenAPI, sendCallSignal } from '../../services/api';
+import { getAgoraTokenAPI, sendCallSignal, logCallEnd } from '../../services/api';
 import { 
     PhoneOff, Video, VideoOff, Mic, MicOff, Minimize2, Settings, X, Signal, 
     MonitorUp, Maximize2, User as UserIcon, LayoutGrid, Layout
@@ -74,20 +75,22 @@ const containerVariants: Variants = {
         width: '100%',
         height: '100%',
         borderRadius: 0,
-        zIndex: 100,
-        transition: { type: 'spring', stiffness: 200, damping: 25 }
+        x: 0,
+        y: 0,
+        transition: { type: 'spring', stiffness: 300, damping: 30 }
     },
     mini: {
         position: 'fixed',
         top: 'auto',
         left: 'auto',
         right: 16,
-        bottom: 96, // Above bottom nav/chat input
+        bottom: 96,
         width: isMobile ? 140 : 320,
         height: isMobile ? 200 : 180,
         borderRadius: 16,
-        zIndex: 100,
-        transition: { type: 'spring', stiffness: 200, damping: 25 }
+        x: 0,
+        y: 0,
+        transition: { type: 'spring', stiffness: 300, damping: 30 }
     }
 };
 
@@ -101,8 +104,13 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const localVideoTrack = useRef<ICameraVideoTrack | null>(null);
     const localScreenTrack = useRef<ILocalVideoTrack | null>(null);
     
+    // UI Layout Refs
+    const containerRef = useRef<HTMLDivElement>(null);
     const ringbackRef = useRef<HTMLAudioElement | null>(null);
     const hangupSoundRef = useRef<HTMLAudioElement | null>(null);
+
+    // Call Duration
+    const [startTime] = useState(Date.now());
 
     // Participants State
     const [localParticipant, setLocalParticipant] = useState<Participant>({
@@ -147,9 +155,8 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
 
     // --- AUTO-MUTE BACKGROUND ---
     useEffect(() => {
-        const handleVisibilityChange = async () => {
-            // Keep video active for seamless background experience (Discord behavior)
-        };
+        // Keep video active for seamless experience
+        const handleVisibilityChange = async () => {};
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
     }, []);
@@ -206,6 +213,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                     await client.current?.subscribe(user, mediaType);
                     setRemoteParticipants(prev => {
                         const existing = prev.find(p => p.id === user.uid);
+                        
                         const newUser = existing || {
                             id: user.uid,
                             username: targetUser?.id === user.uid ? targetUser.username : `User ${user.uid}`,
@@ -388,6 +396,11 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const endCall = () => { 
         if (targetUser) sendCallSignal('reject', { conversationId, targetId: targetUser.id, userId: currentUser.id });
         if (hangupSoundRef.current) hangupSoundRef.current.play().catch(e => console.error(e));
+        
+        // Log Duration via API socket
+        const duration = Math.floor((Date.now() - startTime) / 1000);
+        logCallEnd(conversationId, duration, currentUser.id);
+
         if (client.current) client.current.leave();
         setShowFeedback(true);
     };
@@ -400,7 +413,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const getNetworkIcon = () => { if (networkQuality > 4) return <Signal size={16} className="text-red-500" />; if (networkQuality > 2) return <Signal size={16} className="text-yellow-500" />; return <Signal size={16} className="text-green-500" />; };
 
     // --- DISCORD-LIKE LAYOUT ENGINE ---
-    
     const focusParticipant = useMemo(() => {
         if (localParticipant.isScreenSharing) return localParticipant;
         return remoteParticipants.find(p => p.isScreenSharing);
@@ -413,6 +425,31 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         }
         return all;
     }, [localParticipant, remoteParticipants, focusParticipant]);
+
+    // --- MINI PLAYER ---
+    if (isMinimized && !showFeedback) {
+        return (
+            <MotionDiv 
+                drag 
+                dragMomentum={false} 
+                initial={{ scale: 0 }} 
+                animate={{ scale: 1 }} 
+                className={`fixed bottom-24 right-4 z-[100] w-40 h-64 bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden flex flex-col cursor-pointer hover:scale-105 transition-transform ${isTransitioning ? 'pointer-events-none' : ''}`} 
+                onClick={toggleMinimize}
+            >
+                 <div className="flex-1 relative bg-black">
+                     {remoteJoined && remoteParticipants.length > 0 ? (
+                         <Tile participant={focusParticipant || remoteParticipants[0]} isMini={true} />
+                     ) : (
+                         <div className="w-full h-full flex items-center justify-center"><UserIcon className="text-gray-500"/></div>
+                     )}
+                     <div className="absolute top-2 right-2 w-12 h-16 bg-gray-800 rounded border border-white/20 overflow-hidden shadow-lg">
+                        <Tile participant={localParticipant} isMini={true} />
+                     </div>
+                 </div>
+            </MotionDiv>
+        );
+    }
 
     // --- FEEDBACK SCREEN ---
     if (showFeedback) {
@@ -434,13 +471,13 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         );
     }
 
-    // --- UNIFIED RENDER (No more unmounting between mini/full) ---
+    // --- MAIN RENDER (Animated Window) ---
     return (
         <MotionDiv 
             variants={containerVariants}
             initial="full"
             animate={isMinimized ? "mini" : "full"}
-            className="bg-[#121212] text-white flex flex-col font-sans overflow-hidden shadow-2xl border border-gray-800"
+            className="bg-[#121212] text-white flex flex-col font-sans overflow-hidden shadow-2xl border border-gray-800 fixed z-[100]"
             drag={isMinimized}
             dragMomentum={false}
             dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
@@ -484,7 +521,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             </AnimatePresence>
 
             {/* Layout Stage */}
-            <div className="flex-1 w-full h-full relative flex flex-col overflow-hidden">
+            <div ref={containerRef} className="flex-1 w-full h-full relative flex flex-col overflow-hidden">
                 {isMinimized ? (
                     // --- MINI VIEW CONTENT ---
                     <div className="w-full h-full relative bg-gray-900 overflow-hidden rounded-2xl cursor-pointer">
@@ -599,7 +636,7 @@ const Tile = ({ participant, fit = "cover", isMini = false }: { participant: Par
                 const shouldMirror = participant.isLocal && !participant.isScreenSharing;
                 
                 // Stop previous playback to prevent 'track already playing' errors or stale frames
-                // participant.videoTrack.stop(); // Removed excessive stopping which can cause flicker on some browsers
+                participant.videoTrack.stop(); 
                 
                 // Play with precise config
                 participant.videoTrack.play(container, { mirror: shouldMirror, fit });
@@ -614,11 +651,9 @@ const Tile = ({ participant, fit = "cover", isMini = false }: { participant: Par
         }
         
         return () => {
-            // Only stop if we are truly unmounting the participant
-            // To allow seamless transition, we might want to avoid stopping if re-parenting
-            // But Agora Web SDK usually requires a stop before playing in new element
+            // Cleanup prevents ghosting
             try {
-               if(participant.videoTrack) participant.videoTrack.stop(); 
+                if (participant.videoTrack) participant.videoTrack.stop();
             } catch(e) {}
         };
     }, [participant.videoTrack, fit, participant.isScreenSharing, isMini, participant.isLocal]); 

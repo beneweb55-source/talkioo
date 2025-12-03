@@ -1,3 +1,4 @@
+
 import { io, Socket } from 'socket.io-client';
 import { User, Conversation, Message, AuthResponse, FriendRequest, Reaction, GroupMember, Sticker } from '../types';
 
@@ -144,4 +145,8 @@ export const subscribeToCallEvents = (
         socket.off('user_joined_call', onAccepted);
         socket.off('call_declined', onDeclined);
     };
+};
+
+export const logCallEnd = (conversationId: string, duration: number, userId: string) => {
+    if (socket) socket.emit('log_call_end', { conversationId, duration, userId });
 };

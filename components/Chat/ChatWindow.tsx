@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Conversation, Message, User } from '../../types';
-import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates, sendCallSignal } from '../../services/api';
+import { getMessagesAPI, sendMessageAPI, editMessageAPI, deleteMessageAPI, subscribeToMessages, getOtherParticipant, sendTypingEvent, sendStopTypingEvent, subscribeToTypingEvents, markMessagesAsReadAPI, subscribeToReadReceipts, reactToMessageAPI, subscribeToReactionUpdates, subscribeToUserProfileUpdates, sendCallSignal, getGroupMembers } from '../../services/api';
 import { MessageBubble } from './MessageBubble';
 import { Send, Video, Phone, X, Reply, Pencil, ArrowLeft, Image, Loader2, Smile, Search, ChevronDown, ChevronUp, Users, Info, StickyNote, Plus, Sticker as StickerIcon, Mic, Trash2, StopCircle, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -439,24 +439,52 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ conversation, currentUse
     } catch (err: any) { console.error("Erreur envoi:", err); setMessages(prev => prev.filter(m => m.id !== tempId)); setInputText(textToSend); if (fileToSend) { setSelectedFile(fileToSend); setImagePreview(currentPreview); } alert(err.message || "Erreur lors de l'envoi"); } finally { setIsSending(false); }
   };
 
-  const handleCall = (type: 'audio' | 'video') => {
+  const handleCall = async (type: 'audio' | 'video') => {
     if (isBlocked || isBlocking) {
         alert("Impossible d'appeler un contact bloqué.");
         return;
     }
-    if (!conversation.is_group && otherUserId) {
+
+    let targetIds: string[] = [];
+
+    if (conversation.is_group) {
+        try {
+            const members = await getGroupMembers(conversation.id);
+            // Call everyone except myself
+            targetIds = members.map(m => m.id).filter(id => id !== currentUser.id);
+            if (targetIds.length === 0) {
+                alert("Personne d'autre dans ce groupe à appeler !");
+                return;
+            }
+        } catch (e) {
+            console.error("Failed to fetch group members for call", e);
+            alert("Erreur lors de l'initialisation de l'appel de groupe.");
+            return;
+        }
+    } else {
+        if (otherUserId) {
+            targetIds = [otherUserId];
+        }
+    }
+
+    if (targetIds.length > 0) {
         sendCallSignal('start', { 
             conversationId: conversation.id, 
-            targetIds: [otherUserId], 
+            targetIds: targetIds, 
             type,
             caller: currentUser 
         });
+        
+        // Dispatch event for App.tsx to mount CallInterface
         const event = new CustomEvent('init_call', { 
-            detail: { conversationId: conversation.id, targetUser: { id: otherUserId, username: headerName, avatar_url: headerAvatar }, type, isCaller: true } 
+            detail: { 
+                conversationId: conversation.id, 
+                targetUser: conversation.is_group ? null : { id: otherUserId!, username: headerName, avatar_url: headerAvatar }, 
+                type, 
+                isCaller: true 
+            } 
         });
         window.dispatchEvent(event);
-    } else {
-        alert("Appels de groupe bientôt disponibles !");
     }
   };
 

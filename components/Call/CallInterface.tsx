@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useLayoutEffect } from 'react';
 import AgoraRTC, { 
     IAgoraRTCClient, ICameraVideoTrack, IMicrophoneAudioTrack, ILocalVideoTrack, 
     UID
@@ -7,7 +7,7 @@ import { User } from '../../types';
 import { getAgoraTokenAPI, sendCallSignal } from '../../services/api';
 import { 
     PhoneOff, Video, VideoOff, Mic, MicOff, Minimize2, Settings, X, Signal, 
-    MonitorUp, Maximize2, Mic as MicIcon, Camera as CameraIcon, Speaker, User as UserIcon
+    MonitorUp, Maximize2, User as UserIcon, LayoutGrid, Layout, Star
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -26,26 +26,27 @@ interface CallInterfaceProps {
 // --- CONFIGURATION ---
 const isMobile = window.innerWidth < 768;
 
-// Config stricte pour forcer la qualité et la stabilité
+// Config Discord-like pour la fluidité
 const CAMERA_ENCODER_CONFIG: any = isMobile ? {
     width: { ideal: 1280, min: 640 },
     height: { ideal: 720, min: 480 },
-    frameRate: { min: 30, max: 60, ideal: 30 },
-    bitrateMin: 800, bitrateMax: 2000,
+    frameRate: { min: 24, max: 30, ideal: 30 },
+    bitrateMin: 600, bitrateMax: 1500,
     optimizationMode: "motion"
 } : {
     width: { ideal: 1920, min: 1280 },
     height: { ideal: 1080, min: 720 },
     frameRate: { min: 30, max: 60, ideal: 60 },
-    bitrateMin: 2000, bitrateMax: 6000,
+    bitrateMin: 1500, bitrateMax: 4000,
     optimizationMode: "motion"
 };
 
+// Profils de partage d'écran (Priorité : Lisibilité Texte)
 const SCREEN_SHARE_PROFILES = {
-    HD: { width: 1280, height: 720, frameRate: 30, bitrate: 3000 },
-    FHD: { width: 1920, height: 1080, frameRate: 60, bitrate: 5000 },
-    '2K': { width: 2560, height: 1440, frameRate: 60, bitrate: 7000 },
-    '2K+': { width: 3840, height: 2160, frameRate: 60, bitrate: 9000 }
+    HD: { width: 1920, height: 1080, frameRate: 15, bitrate: 2000 },
+    FHD: { width: 1920, height: 1080, frameRate: 30, bitrate: 4000 },
+    '2K': { width: 2560, height: 1440, frameRate: 30, bitrate: 6000 },
+    '60FPS': { width: 1920, height: 1080, frameRate: 60, bitrate: 6000 }
 };
 
 type ScreenQuality = keyof typeof SCREEN_SHARE_PROFILES;
@@ -62,6 +63,7 @@ interface Participant {
     videoTrack?: ICameraVideoTrack | ILocalVideoTrack | any;
     audioTrack?: IMicrophoneAudioTrack | any;
     isSpeaking: boolean;
+    isScreenSharing: boolean; 
     joinedAt: number;
 }
 
@@ -77,9 +79,8 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     
     // UI Layout Refs
     const containerRef = useRef<HTMLDivElement>(null);
-    
-    // Audio Elements
     const ringbackRef = useRef<HTMLAudioElement | null>(null);
+    const hangupSoundRef = useRef<HTMLAudioElement | null>(null);
 
     // Participants State
     const [localParticipant, setLocalParticipant] = useState<Participant>({
@@ -90,6 +91,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         hasVideo: callType === 'video',
         hasAudio: true,
         isSpeaking: false,
+        isScreenSharing: false,
         joinedAt: Date.now()
     });
     
@@ -109,6 +111,10 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const [callStatus, setCallStatus] = useState(isCaller ? 'Sonnerie en cours...' : 'Connexion...');
     const [networkQuality, setNetworkQuality] = useState<number>(0);
 
+    // Feedback State
+    const [showFeedback, setShowFeedback] = useState(false);
+    const [feedbackRating, setFeedbackRating] = useState<string | null>(null);
+
     // Devices
     const [mics, setMics] = useState<DeviceInfo[]>([]);
     const [cams, setCams] = useState<DeviceInfo[]>([]);
@@ -117,32 +123,15 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     const [selectedCam, setSelectedCam] = useState('');
     const [selectedSpeaker, setSelectedSpeaker] = useState('');
 
-    // --- RESIZE OBSERVER ---
-    useEffect(() => {
-        if (!containerRef.current) return;
-        const resizeObserver = new ResizeObserver(() => {
-            // Trigger UI update if necessary, mostly handled by CSS grid
-        });
-        resizeObserver.observe(containerRef.current);
-        return () => resizeObserver.disconnect();
-    }, []);
-
-    // --- AUTO-MUTE BACKGROUND (PERFORMANCE) ---
+    // --- AUTO-MUTE BACKGROUND ---
     useEffect(() => {
         const handleVisibilityChange = async () => {
-            if (document.hidden) {
-                if (localVideoTrack.current && isVideoEnabled) {
-                    await localVideoTrack.current.setEnabled(false);
-                }
-            } else {
-                if (localVideoTrack.current && isVideoEnabled && !isScreenSharing) {
-                    await localVideoTrack.current.setEnabled(true);
-                }
-            }
+            // Optionnel : Couper la vidéo pour économiser la bande passante si l'onglet est masqué
+            // Pour l'instant on laisse actif comme Discord
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, [isVideoEnabled, isScreenSharing]);
+    }, []);
 
     // --- DEVICE FETCHING ---
     useEffect(() => {
@@ -184,6 +173,9 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             ringbackRef.current.play().catch(() => {});
         }
 
+        hangupSoundRef.current = new Audio('https://www.myinstants.com/media/sounds/discord-leave.mp3');
+        hangupSoundRef.current.volume = 0.5;
+
         const initCall = async () => {
             try {
                 const { token, appId } = await getAgoraTokenAPI(conversationId);
@@ -193,6 +185,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                     await client.current?.subscribe(user, mediaType);
                     setRemoteParticipants(prev => {
                         const existing = prev.find(p => p.id === user.uid);
+                        
                         const newUser = existing || {
                             id: user.uid,
                             username: targetUser?.id === user.uid ? targetUser.username : `User ${user.uid}`,
@@ -203,6 +196,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                             videoTrack: user.videoTrack,
                             audioTrack: user.audioTrack,
                             isSpeaking: false,
+                            isScreenSharing: false, 
                             joinedAt: Date.now()
                         };
 
@@ -230,7 +224,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                     if (client.current?.remoteUsers.length === 0) {
                         setRemoteJoined(false);
                         setCallStatus('Appel terminé');
-                        setTimeout(endCall, 1000);
                     }
                 });
 
@@ -240,11 +233,9 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                     if (ringbackRef.current) { ringbackRef.current.pause(); ringbackRef.current = null; }
                 });
 
-                // --- VOLUME INDICATOR (VAD) ---
                 client.current.enableAudioVolumeIndicator();
                 client.current.on("volume-indicator", volumes => {
                     const threshold = 5; 
-                    
                     volumes.forEach(volume => {
                         const isSpeaking = volume.level > threshold;
                         if (volume.uid === 0 || volume.uid === currentUser.id) {
@@ -284,13 +275,11 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 console.error("Init failed", error);
                 setCallStatus("Erreur connexion");
                 if (ringbackRef.current) ringbackRef.current.pause();
-                setTimeout(onClose, 2000);
             }
         };
 
         initCall();
 
-        // --- CLEANUP ---
         return () => {
             if (ringbackRef.current) ringbackRef.current.pause();
             localAudioTrack.current?.stop();
@@ -334,7 +323,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         if (isTransitioning) return;
         setIsTransitioning(true);
         setIsMinimized(!isMinimized);
-        setTimeout(() => setIsTransitioning(false), 500);
+        setTimeout(() => setIsTransitioning(false), 600);
     };
 
     const startScreenShare = async (quality: ScreenQuality) => {
@@ -343,15 +332,15 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             if (localVideoTrack.current) { 
                 await client.current?.unpublish(localVideoTrack.current); 
                 setIsVideoEnabled(false);
-                setLocalParticipant(p => ({...p, hasVideo: false})); 
+                setLocalParticipant(p => ({...p, hasVideo: false })); 
             }
             const config = SCREEN_SHARE_PROFILES[quality];
-            const screenTrack = await AgoraRTC.createScreenVideoTrack({ encoderConfig: { ...config, bitrateMax: config.bitrate }, optimizationMode: "motion" });
+            const screenTrack = await AgoraRTC.createScreenVideoTrack({ encoderConfig: { ...config, bitrateMax: config.bitrate }, optimizationMode: "detail" });
             const actualTrack = Array.isArray(screenTrack) ? screenTrack[0] : screenTrack;
             await client.current?.publish(actualTrack);
             localScreenTrack.current = actualTrack;
             setIsScreenSharing(true);
-            setLocalParticipant(p => ({...p, videoTrack: actualTrack, hasVideo: true}));
+            setLocalParticipant(p => ({...p, videoTrack: actualTrack, hasVideo: true, isScreenSharing: true }));
             
             actualTrack.on("track-ended", stopScreenShare);
         } catch (e) { 
@@ -359,7 +348,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             if (localVideoTrack.current) { 
                 await client.current?.publish(localVideoTrack.current); 
                 setIsVideoEnabled(true); 
-                setLocalParticipant(p => ({...p, hasVideo: true}));
+                setLocalParticipant(p => ({...p, hasVideo: true }));
             } 
         }
     };
@@ -371,58 +360,61 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
             if (localVideoTrack.current) { 
                 await client.current?.publish(localVideoTrack.current); 
                 setIsVideoEnabled(true); 
-                setLocalParticipant(p => ({...p, videoTrack: localVideoTrack.current, hasVideo: true}));
+                setLocalParticipant(p => ({...p, videoTrack: localVideoTrack.current, hasVideo: true, isScreenSharing: false }));
             }
         }
     };
 
-    const endCall = () => { if (targetUser) sendCallSignal('reject', { conversationId, targetId: targetUser.id, userId: currentUser.id }); onClose(); };
-    const getNetworkIcon = () => { if (networkQuality > 4) return <Signal size={16} className="text-red-500" />; if (networkQuality > 2) return <Signal size={16} className="text-yellow-500" />; return <Signal size={16} className="text-green-500" />; };
-
-    // --- SMART GRID COMPUTATION ---
-    const allParticipants = useMemo(() => {
-        if (!remoteJoined) return [];
-        // Keep order stable (by join time/ID) to avoid tiles jumping around
-        return [localParticipant, ...remoteParticipants]; 
-    }, [localParticipant, remoteParticipants, remoteJoined]);
-
-    // Responsive Grid Logic - Supports 10+ participants
-    const getGridClass = (count: number) => {
-        // MOBILE (< 768px)
-        if (isMobile) {
-            if (count <= 1) return 'grid-cols-1';
-            if (count <= 2) return 'grid-cols-1'; // Stacked vertical
-            if (count <= 4) return 'grid-cols-2'; // 2x2
-            return 'grid-cols-2'; // Fixed 2 cols, scrolls vertical for 5+
-        }
-        // DESKTOP
-        if (count <= 1) return 'grid-cols-1';
-        if (count <= 2) return 'grid-cols-2';
-        if (count <= 4) return 'grid-cols-2'; // 2x2
-        if (count <= 6) return 'grid-cols-3'; // 2x3
-        if (count <= 9) return 'grid-cols-3'; // 3x3
-        if (count <= 12) return 'grid-cols-4'; // 3x4
-        return 'grid-cols-5'; // 5 cols for mass meetings
+    const endCall = () => { 
+        if (targetUser) sendCallSignal('reject', { conversationId, targetId: targetUser.id, userId: currentUser.id });
+        if (hangupSoundRef.current) hangupSoundRef.current.play().catch(e => console.error(e));
+        if (client.current) client.current.leave();
+        setShowFeedback(true);
     };
 
-    // --- MINI PLAYER RENDER ---
-    if (isMinimized) {
+    const handleFeedbackSubmit = (rating: string) => {
+        setFeedbackRating(rating);
+        setTimeout(onClose, 400); 
+    };
+
+    const getNetworkIcon = () => { if (networkQuality > 4) return <Signal size={16} className="text-red-500" />; if (networkQuality > 2) return <Signal size={16} className="text-yellow-500" />; return <Signal size={16} className="text-green-500" />; };
+
+    // --- DISCORD-LIKE LAYOUT ENGINE ---
+    
+    // 1. Identify "Focus" (Screen Share or Pinned)
+    const focusParticipant = useMemo(() => {
+        if (localParticipant.isScreenSharing) return localParticipant;
+        return remoteParticipants.find(p => p.isScreenSharing);
+    }, [localParticipant, remoteParticipants]);
+
+    // 2. Identify "Grid" members
+    const gridParticipants = useMemo(() => {
+        let all = [localParticipant, ...remoteParticipants];
+        if (focusParticipant) {
+            all = all.filter(p => p.id !== focusParticipant.id);
+        }
+        return all;
+    }, [localParticipant, remoteParticipants, focusParticipant]);
+
+    // --- MINI PLAYER ---
+    if (isMinimized && !showFeedback) {
         return (
             <MotionDiv 
                 drag 
                 dragMomentum={false} 
                 initial={{ scale: 0 }} 
                 animate={{ scale: 1 }} 
-                className={`fixed bottom-24 right-4 z-[100] w-36 h-56 bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden flex flex-col cursor-pointer ${isTransitioning ? 'pointer-events-none' : ''}`} 
+                className={`fixed bottom-24 right-4 z-[100] w-40 h-64 bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden flex flex-col cursor-pointer hover:scale-105 transition-transform ${isTransitioning ? 'pointer-events-none' : ''}`} 
                 onClick={toggleMinimize}
             >
                  <div className="flex-1 relative bg-black">
+                     {/* Priorité : Partage d'écran > Remote > Local */}
                      {remoteJoined && remoteParticipants.length > 0 ? (
-                         <Tile participant={remoteParticipants[0]} isMini={true} />
+                         <Tile participant={focusParticipant || remoteParticipants[0]} isMini={true} />
                      ) : (
                          <div className="w-full h-full flex items-center justify-center"><UserIcon className="text-gray-500"/></div>
                      )}
-                     <div className="absolute top-2 right-2 w-10 h-14 bg-gray-800 rounded border border-white/20 overflow-hidden shadow-lg">
+                     <div className="absolute top-2 right-2 w-12 h-16 bg-gray-800 rounded border border-white/20 overflow-hidden shadow-lg">
                         <Tile participant={localParticipant} isMini={true} />
                      </div>
                  </div>
@@ -430,13 +422,34 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
         );
     }
 
+    // --- FEEDBACK SCREEN ---
+    if (showFeedback) {
+        const reactions = [ { label: 'Terrible', emoji: '😖' }, { label: 'Mauvais', emoji: '😕' }, { label: 'Moyen', emoji: '😐' }, { label: 'Bien', emoji: '🙂' }, { label: 'Excellent', emoji: '🤩' } ];
+        return (
+            <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+                <MotionDiv initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} className="bg-gray-800 border border-gray-700 rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
+                    <h3 className="text-xl font-bold text-white mb-2">Appel terminé</h3>
+                    <div className="flex justify-between gap-2 mb-6 mt-6">
+                        {reactions.map((r) => (
+                            <button key={r.label} onClick={() => handleFeedbackSubmit(r.label)} className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${feedbackRating === r.label ? 'bg-brand-500/20 scale-110' : 'hover:bg-white/5 hover:scale-105'}`}>
+                                <span className="text-3xl">{r.emoji}</span>
+                            </button>
+                        ))}
+                    </div>
+                    <button onClick={onClose} className="text-gray-500 hover:text-white text-sm underline">Passer</button>
+                </MotionDiv>
+            </MotionDiv>
+        );
+    }
+
+    // --- MAIN RENDER ---
     return (
-        <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] bg-[#1a1a1a] text-white flex flex-col font-sans overflow-hidden">
+        <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] bg-[#121212] text-white flex flex-col font-sans overflow-hidden">
             
-            {/* --- HEADER --- */}
-            <div className="absolute top-0 left-0 right-0 p-4 z-20 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent pointer-events-none">
-                <div className={`pointer-events-auto flex items-center gap-3 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 ${isTransitioning ? 'pointer-events-none' : ''}`}>
-                    <button onClick={toggleMinimize} className="hover:text-gray-300"><Minimize2 size={18}/></button>
+            {/* Header */}
+            <div className="absolute top-0 left-0 right-0 p-4 z-20 flex justify-between items-center pointer-events-none">
+                <div className={`pointer-events-auto flex items-center gap-3 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 shadow-lg ${isTransitioning ? 'pointer-events-none' : ''}`}>
+                    <button onClick={toggleMinimize} className="hover:text-gray-300 transition-colors"><Minimize2 size={18}/></button>
                     <div className="w-[1px] h-4 bg-white/20"></div>
                     <div>
                         <h2 className="font-bold text-sm leading-none flex items-center gap-2">
@@ -449,7 +462,7 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 <button onClick={() => setShowSettings(true)} className="pointer-events-auto p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md rounded-full border border-white/10 transition-colors"><Settings size={18} className="text-gray-300" /></button>
             </div>
 
-            {/* --- SETTINGS MODAL --- */}
+            {/* Settings Modal */}
             <AnimatePresence>
                 {showSettings && (
                     <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -467,40 +480,63 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                 )}
             </AnimatePresence>
 
-            {/* --- MAIN GRID STAGE --- */}
-            <div ref={containerRef} className="flex-1 w-full h-full relative p-2 md:p-4 flex flex-col items-center justify-center overflow-hidden">
+            {/* Layout Stage */}
+            <div ref={containerRef} className="flex-1 w-full h-full relative p-2 md:p-4 flex flex-col overflow-hidden">
                 {!remoteJoined ? (
-                    // WAITING SCREEN
-                    <div className="flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
+                    <div className="flex-1 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-500">
                         <div className="relative mb-8">
                             <div className="h-32 w-32 md:h-40 md:w-40 rounded-full bg-gray-800 p-1 ring-4 ring-white/5 relative z-10 overflow-hidden shadow-2xl">
                                 {targetUser?.avatar_url ? <img src={targetUser.avatar_url} className="w-full h-full rounded-full object-cover" /> : <div className="w-full h-full rounded-full bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center text-4xl font-bold">{targetUser?.username?.[0]}</div>}
                             </div>
                         </div>
                         <h3 className="text-2xl font-bold mb-2">Appel en cours...</h3>
-                        <p className="text-gray-400 text-sm">En attente de réponse</p>
                     </div>
                 ) : (
-                    // ACTIVE GRID (SCROLLABLE IF NEEDED)
-                    <div className={`
-                        grid gap-2 w-full h-full max-w-[1600px] transition-all duration-300 ease-in-out overflow-y-auto content-center
-                        ${getGridClass(allParticipants.length)}
-                    `} style={{ maxHeight: '85vh' }}>
-                        {allParticipants.map(participant => (
-                            <div key={participant.id} className="min-h-[180px] md:min-h-[220px]">
-                                <Tile participant={participant} />
+                    <div className="flex-1 w-full h-full flex flex-col gap-2">
+                        {/* 1. FOCUS MODE */}
+                        {focusParticipant ? (
+                            <div className="flex-1 flex flex-col md:flex-row gap-2 h-full overflow-hidden">
+                                <div className="flex-1 bg-black rounded-2xl overflow-hidden relative border border-white/5 shadow-2xl">
+                                    <Tile participant={focusParticipant} fit="contain" />
+                                    <div className="absolute top-4 left-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 backdrop-blur-md border border-white/10">
+                                        <MonitorUp size={12} className="text-brand-500"/>
+                                        {focusParticipant.isLocal ? 'Vous partagez votre écran' : `${focusParticipant.username} partage son écran`}
+                                    </div>
+                                </div>
+                                <div className={`flex md:flex-col gap-2 overflow-auto h-[140px] md:h-full md:w-[260px] ${gridParticipants.length === 0 ? 'hidden' : ''}`}>
+                                    {gridParticipants.map(p => (
+                                        <div key={p.id} className="min-w-[180px] md:min-w-0 md:h-[180px] bg-gray-900 rounded-xl overflow-hidden flex-shrink-0 border border-white/5 relative shadow-lg">
+                                            <Tile participant={p} fit="cover" />
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
-                        ))}
+                        ) : (
+                            /* 2. GRID MODE */
+                            <div className={`
+                                grid gap-2 w-full h-full max-w-[1800px] mx-auto transition-all duration-300 ease-in-out
+                                ${gridParticipants.length === 1 ? 'grid-cols-1' :
+                                  gridParticipants.length === 2 ? (isMobile ? 'grid-rows-2' : 'grid-cols-2') :
+                                  gridParticipants.length <= 4 ? 'grid-cols-2 grid-rows-2' :
+                                  gridParticipants.length <= 6 ? (isMobile ? 'grid-cols-2' : 'grid-cols-3 grid-rows-2') :
+                                  (isMobile ? 'grid-cols-2' : 'grid-cols-4')}
+                            `} style={{ maxHeight: 'calc(100vh - 120px)' }}>
+                                {gridParticipants.map(p => (
+                                    <div key={p.id} className="relative w-full h-full min-h-[150px] bg-gray-900 rounded-2xl overflow-hidden border border-white/5 shadow-xl">
+                                        <Tile participant={p} fit="cover" />
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
 
-            {/* --- CONTROLS DOCK --- */}
+            {/* Controls */}
             <div className="flex justify-center pb-6 pt-4 w-full z-40 bg-gradient-to-t from-black via-black/80 to-transparent">
                 <div className="flex items-center gap-3 px-6 py-3 bg-gray-900/90 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl">
                     <ControlBtn active={!isMuted} onClick={toggleMute} onIcon={<Mic size={20}/>} offIcon={<MicOff size={20}/>} />
                     <ControlBtn active={isVideoEnabled} onClick={toggleVideo} onIcon={<Video size={20}/>} offIcon={<VideoOff size={20}/>} />
-                    
                     <div className="relative">
                         <ControlBtn active={isScreenSharing} onClick={() => { if(isScreenSharing) stopScreenShare(); else setShowQualityMenu(!showQualityMenu); }} onIcon={<MonitorUp size={20} className="text-white"/>} offIcon={<MonitorUp size={20}/>} className={isScreenSharing ? 'bg-green-600' : ''} />
                         <AnimatePresence>
@@ -511,7 +547,6 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
                             )}
                         </AnimatePresence>
                     </div>
-
                     <div className="w-px h-8 bg-white/10 mx-1"></div>
                     <MotionButton onClick={endCall} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl shadow-lg shadow-red-600/20"><PhoneOff size={24} /></MotionButton>
                 </div>
@@ -520,64 +555,83 @@ export const CallInterface: React.FC<CallInterfaceProps> = ({ conversationId, cu
     );
 };
 
-// --- SUB-COMPONENTS ---
-
 const ControlBtn = ({ active, onClick, onIcon, offIcon, className = '' }: any) => (
     <MotionButton onClick={onClick} whileHover={{ scale: 1.1, y: -2 }} whileTap={{ scale: 0.95 }} className={`p-3.5 rounded-xl transition-all ${active ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-white text-gray-900'} ${className}`}>
         {active ? onIcon : offIcon}
     </MotionButton>
 );
 
-const Tile = ({ participant, isMini = false }: { participant: Participant, isMini?: boolean }) => {
+// --- BULLETPROOF VIDEO TILE ---
+const Tile = ({ participant, fit = "cover", isMini = false }: { participant: Participant, fit?: "cover" | "contain", isMini?: boolean }) => {
     const videoRef = useRef<HTMLDivElement>(null);
 
-    // Robust Track Playing
-    useEffect(() => {
-        if (videoRef.current && participant.videoTrack) {
+    // useLayoutEffect prevents visual flickering (black screen) during resize/layout changes
+    useLayoutEffect(() => {
+        const container = videoRef.current;
+        if (container && participant.videoTrack) {
             try {
-                // Ensure no ghost tracks on re-render
-                participant.videoTrack.play(videoRef.current);
-            } catch(e) { console.error("Error playing track", e); }
+                // Correct Mirroring Logic: Local Camera = Mirrored. Remote Camera/Screenshare = Normal.
+                const shouldMirror = participant.isLocal && !participant.isScreenSharing;
+                
+                // Stop previous playback to prevent 'track already playing' errors or stale frames
+                participant.videoTrack.stop(); 
+                
+                // Play with precise config
+                participant.videoTrack.play(container, { mirror: shouldMirror, fit });
+                
+                // Force CSS transform just in case Agora SDK resets it
+                const videoElement = container.querySelector('video');
+                if (videoElement) {
+                    videoElement.style.objectFit = fit;
+                    videoElement.style.transform = shouldMirror ? 'scaleX(-1)' : 'none';
+                }
+            } catch(e) { console.error("Track play error:", e); }
         }
-    }, [participant.videoTrack, isMini]); 
+        
+        return () => {
+            // Cleanup prevents ghosting
+            try {
+                if (participant.videoTrack) participant.videoTrack.stop();
+            } catch(e) {}
+        };
+    }, [participant.videoTrack, fit, participant.isScreenSharing, isMini, participant.isLocal]); 
 
-    // Visual Feedback for Voice Activity (Solid green border, no pulsing animation)
-    const activeBorderClass = participant.isSpeaking && !isMini 
-        ? 'border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.6)] ring-1 ring-green-500' 
-        : 'border-white/5';
+    // Solid Green Border for VAD (No Animation to save CPU/GPU)
+    const activeBorderClass = participant.isSpeaking && !isMini && !participant.isLocal
+        ? 'border-green-500 shadow-[0_0_0_2px_rgba(34,197,94,1)]' 
+        : 'border-transparent';
 
     return (
-        <div className={`relative w-full h-full bg-gray-800 rounded-2xl overflow-hidden shadow-lg border transition-all duration-150 ${activeBorderClass}`}>
-            {/* Video Layer */}
+        <div className={`w-full h-full relative transition-all duration-150 ${activeBorderClass}`}>
             {participant.hasVideo ? (
-                <div ref={videoRef} className="w-full h-full [&>div]:!w-full [&>div]:!h-full [&>video]:!object-cover" />
+                <div ref={videoRef} className="w-full h-full bg-black flex items-center justify-center overflow-hidden rounded-xl" />
             ) : (
-                // Audio Only Fallback
-                <div className="w-full h-full flex flex-col items-center justify-center bg-gray-900 relative p-4">
-                    <div className={`relative z-10 rounded-full bg-gray-700 overflow-hidden border-4 border-gray-800 shadow-xl ${isMini ? 'w-10 h-10' : 'w-20 h-20 md:w-28 md:h-28'}`}>
+                <div className="w-full h-full flex flex-col items-center justify-center bg-gray-800 relative p-4">
+                    <div className={`relative z-10 rounded-full bg-gray-700 overflow-hidden border-4 border-gray-800 shadow-xl ${isMini ? 'w-10 h-10' : 'w-24 h-24 md:w-32 md:h-32'}`}>
                         {participant.avatarUrl ? <img src={participant.avatarUrl} className="w-full h-full object-cover"/> : <div className="w-full h-full flex items-center justify-center text-gray-400 font-bold text-2xl">{participant.username[0]}</div>}
                     </div>
-                    {/* Speaking visualizer - Static Glow if needed, but removed pulse */}
+                    {participant.isSpeaking && !isMini && (
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 border-4 border-green-500 rounded-full opacity-50" />
+                    )}
                     {!isMini && <p className="mt-4 font-bold text-sm md:text-lg text-gray-200 truncate max-w-[90%] text-center">{participant.username}</p>}
                 </div>
             )}
 
-            {/* Overlays */}
             {!isMini && (
-                <div className="absolute bottom-3 left-3 flex gap-2 pointer-events-none max-w-[85%]">
-                    <div className="bg-black/40 backdrop-blur-md px-2.5 py-1 rounded-lg flex items-center gap-2 border border-white/10 overflow-hidden">
-                        {participant.isSpeaking && <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"/>}
-                        <span className="text-xs font-bold text-white shadow-sm truncate">{participant.username} {participant.isLocal && '(Vous)'}</span>
+                <>
+                    <div className="absolute bottom-3 left-3 flex gap-2 pointer-events-none max-w-[85%] z-20">
+                        <div className="bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg flex items-center gap-2 border border-white/10 overflow-hidden">
+                            {participant.isSpeaking && <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"/>}
+                            <span className="text-xs font-bold text-white shadow-sm truncate">{participant.username} {participant.isLocal && '(Vous)'}</span>
+                        </div>
+                        {!participant.hasAudio && <div className="bg-red-500/90 backdrop-blur-md p-1.5 rounded-lg text-white flex-shrink-0"><MicOff size={12}/></div>}
                     </div>
-                    {!participant.hasAudio && <div className="bg-red-500/80 backdrop-blur-md p-1 rounded-lg text-white flex-shrink-0"><MicOff size={12}/></div>}
-                </div>
-            )}
-            
-            {/* Status Icons */}
-            {!participant.hasVideo && !isMini && (
-                <div className="absolute top-3 right-3 bg-black/40 backdrop-blur-md px-2 py-1 rounded text-[10px] text-gray-300 border border-white/5 flex items-center gap-1">
-                   <VideoOff size={10}/> Caméra off
-                </div>
+                    {!participant.hasVideo && (
+                        <div className="absolute top-3 right-3 bg-black/40 backdrop-blur-md px-2 py-1 rounded text-[10px] text-gray-300 border border-white/5 flex items-center gap-1 z-20">
+                           <VideoOff size={10}/> Caméra off
+                        </div>
+                    )}
+                </>
             )}
         </div>
     );

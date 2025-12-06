@@ -351,12 +351,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
       setShowReactionMenu(false);
   };
 
-  // Optimization: Call Log Bubbles should be slim and compact to prevent spam
   const bubblePaddingClass = isCallLog 
-    ? 'p-1.5 px-3' // Very compact for calls
-    : (jumboClass || isSticker ? '' : 'px-3 py-2'); // Tight padding for better timestamp fit
+    ? 'p-1.5 px-3' 
+    : (jumboClass || isSticker ? '' : 'px-3 py-2');
 
-  // Sticker container should be transparent and borderless
   const bubbleClasses = isSticker 
     ? 'bg-transparent shadow-none border-none p-0' 
     : jumboClass 
@@ -371,7 +369,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
         layout
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        /* Reduce bottom margin for call logs to group them visually */
         className={`flex w-full ${hasReactions ? 'mb-8' : (isCallLog ? 'mb-1.5' : 'mb-3')} ${isOwn ? 'justify-end' : 'justify-start'} group relative select-none md:select-text`}
         onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
         style={{ zIndex: showReactionMenu || showFullPicker || clickedReactionEmoji ? 50 : 10 }}
@@ -391,7 +388,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
             ${bubbleClasses} 
             ${isDeleted ? 'opacity-80 italic px-4 py-2.5' : bubblePaddingClass}`}
         >
-          {/* --- MODERN REACTION MENU --- */}
+          {/* Reaction Menu logic remains same ... */}
           <AnimatePresence>
             {!isDeleted && showReactionMenu && (
                 <MotionDiv 
@@ -475,19 +472,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                         <Reply size={16} />
                     </button>
                  )}
-                 
                  {isOwn && onEdit && !isMedia && !isSticker && !isAudio && !isCallLog && (
                     <button onClick={(e) => { e.stopPropagation(); onEdit(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-blue-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Modifier">
                         <Pencil size={16} />
                     </button>
                  )}
-
                  {isOwn && onDelete && (
                     <button onClick={(e) => { e.stopPropagation(); onDelete(message); }} className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-red-500 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm" title="Supprimer">
                         <Trash2 size={16} />
                     </button>
                  )}
-
                  <button
                     onClick={(e) => { e.stopPropagation(); setShowReactionMenu(true); }}
                     className="p-2 rounded-full bg-gray-200/50 dark:bg-gray-700/50 hover:bg-yellow-400 hover:text-white text-gray-500 dark:text-gray-400 transition-colors backdrop-blur-sm"
@@ -534,7 +528,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                                 onLoad={() => setImgLoaded(true)}
                                 onError={() => { setImgError(true); setImgLoaded(true); }}
                             />
-                            {/* Sticker Timestamp - Floating Pill */}
                             <div className="absolute bottom-1 right-1 bg-black/30 backdrop-blur-md text-white text-[10px] font-medium px-1.5 py-0.5 rounded-full flex items-center gap-1">
                                 <span>{new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                 {isOwn && (
@@ -579,33 +572,27 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                              )}
                           </div>
                       ) : (
-                          !isLegacyBase64 && renderContent(safeContent, highlightTerm)
+                          <>
+                            {!isLegacyBase64 && renderContent(safeContent, highlightTerm)}
+                            {/* Embedded Timestamp: Floats right at the end of text */}
+                            {!jumboClass && (
+                                <span className="inline-block align-bottom float-right ml-2 mt-1 select-none">
+                                    <span className={`text-[10px] whitespace-nowrap leading-none flex items-center gap-0.5 ${isOwn ? 'text-white/70' : 'text-gray-400'}`}>
+                                        {isEdited && <span className="italic mr-0.5">modifié</span>}
+                                        {new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        {isOwn && (
+                                            isReadByOthers 
+                                                ? <CheckCheck size={12} className="ml-0.5 text-white/90" /> 
+                                                : <Check size={12} className="ml-0.5 text-white/60" />
+                                        )}
+                                    </span>
+                                </span>
+                            )}
+                          </>
                       )}
                   </>
               )}
           </div>
-          
-          {/* Timestamp Container (Hidden for stickers as they have their own) */}
-          {!isSticker && (
-              <div className={`
-                  flex items-center justify-end gap-1 mt-0.5 select-none flex-wrap w-full
-                  ${jumboClass
-                    ? 'text-gray-500 dark:text-gray-400' 
-                    : (isOwn ? 'text-brand-100' : 'text-gray-400')
-                  } 
-                  ${jumboClass || isCallLog ? 'px-2 pb-1' : ''}
-              `}>
-                {isEdited && <span className="text-[10px] opacity-80">modifié</span>}
-                <span className="text-[10px] opacity-80 whitespace-nowrap leading-none">
-                  {new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-                {isOwn && !isDeleted && (
-                    isReadByOthers 
-                        ? <CheckCheck size={14} className={`${jumboClass ? 'text-brand-500' : 'text-white'} flex-shrink-0`} /> 
-                        : <Check size={14} className={`${jumboClass ? 'text-gray-400' : 'text-white/60'} flex-shrink-0`} />
-                )}
-              </div>
-          )}
 
           {!isDeleted && (
             <div className={`flex flex-wrap gap-1.5 mt-2 -mb-5 relative z-20 ${jumboClass || isSticker || isCallLog ? 'mt-0 px-2' : ''}`}>

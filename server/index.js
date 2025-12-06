@@ -502,6 +502,26 @@ app.post('/api/conversations', authenticateToken, async (req, res) => {
     if (!participantIds || participantIds.length === 0) return res.status(400).json({ error: "Participants requis." });
     try {
         const is_group = participantIds.length > 1 || (name && name.length > 0);
+
+        // CHECK EXISTING 1:1 CONVERSATION
+        if (!is_group && participantIds.length === 1) {
+            const targetId = participantIds[0];
+            const existing = await pool.query(
+                `SELECT c.id FROM conversations c 
+                 JOIN participants p1 ON c.id = p1.conversation_id 
+                 JOIN participants p2 ON c.id = p2.conversation_id 
+                 WHERE c.is_group = FALSE AND p1.user_id = $1 AND p2.user_id = $2`,
+                [userId, targetId]
+            );
+            if (existing.rows.length > 0) {
+                const convId = existing.rows[0].id;
+                // Restore if soft deleted
+                await pool.query('UPDATE participants SET last_deleted_at = NULL WHERE conversation_id = $1 AND user_id = $2', [convId, userId]);
+                const allParticipants = [userId, targetId];
+                return res.status(200).json({ conversationId: convId, name: null, is_group: false, participants: allParticipants });
+            }
+        }
+
         const convRes = await pool.query('INSERT INTO conversations (name, is_group) VALUES ($1, $2) RETURNING id', [is_group ? name : null, is_group]);
         const conversationId = convRes.rows[0].id;
         const allParticipants = [...new Set([...participantIds, userId])];

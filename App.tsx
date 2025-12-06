@@ -300,14 +300,16 @@ const Dashboard = () => {
                                   onClick={async () => {
                                       setLoading(true);
                                       try {
-                                          // Check if we have an existing conversation ID on the contact object
                                           let convId = (contact as any).conversation_id;
                                           
-                                          if (!convId) {
-                                              // Try to create/get via API
+                                          // If we have an ID but it's not in our loaded list, it might be deleted locally.
+                                          // Calling create (which is now get-or-create/restore on backend) ensures it's available.
+                                          const needsRestore = convId && !conversations.find(c => c.id === convId);
+
+                                          if (!convId || needsRestore) {
                                               const res = await createGroupConversationAPI("", [contact.id]);
                                               convId = res.conversationId;
-                                              await fetchData(); // Refresh to ensure we have data
+                                              await fetchData(); // Refresh entire list
                                           }
                                           
                                           setActiveConversationId(convId);

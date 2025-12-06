@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { updateProfileAPI, updatePasswordAPI, getBlockedUsersAPI, unblockUserAPI } from '../../services/api';
@@ -133,7 +134,10 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onClose }) => {
             <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Camera className="text-white" size={20} /></div>
             <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleAvatarChange} />
         </div>
-        <h2 className="mt-2 text-lg font-bold dark:text-white">{user?.username}</h2>
+        <h2 className="mt-2 text-lg font-bold dark:text-white flex items-center gap-2">
+            {user?.username}
+            <span className="text-gray-500 text-sm font-normal bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">#{user?.tag}</span>
+        </h2>
       </div>
 
       <div className="flex overflow-x-auto gap-4 mb-6 border-b border-gray-100 dark:border-gray-800 pb-1 no-scrollbar">

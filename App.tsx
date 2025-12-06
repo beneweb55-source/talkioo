@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthScreen } from './components/Auth/AuthScreen';
@@ -297,10 +298,26 @@ const Dashboard = () => {
                               </div>
                               <button 
                                   onClick={async () => {
+                                      setLoading(true);
                                       try {
-                                          const res = await createGroupConversationAPI("", [contact.id]); 
-                                          alert("Pour discuter, utilisez la recherche dans l'onglet 'Chats' ou créez un groupe.");
-                                      } catch(e) { console.error(e); }
+                                          // Check if we have an existing conversation ID on the contact object
+                                          let convId = (contact as any).conversation_id;
+                                          
+                                          if (!convId) {
+                                              // Try to create/get via API
+                                              const res = await createGroupConversationAPI("", [contact.id]);
+                                              convId = res.conversationId;
+                                              await fetchData(); // Refresh to ensure we have data
+                                          }
+                                          
+                                          setActiveConversationId(convId);
+                                          setMobileView('chats');
+                                      } catch(e) { 
+                                          console.error(e);
+                                          alert("Erreur lors de l'ouverture de la discussion.");
+                                      } finally {
+                                          setLoading(false);
+                                      }
                                   }}
                                   className="text-gray-400 hover:text-brand-500"
                               >

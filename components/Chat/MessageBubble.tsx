@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, Reaction } from '../../types';
 import { Check, CheckCheck, Pencil, Trash2, Reply, AlertTriangle, Loader2, Image as ImageIcon, SmilePlus, Plus, X, Smile, Play, Pause, Phone, PhoneMissed, PhoneOff, PhoneIncoming, PhoneOutgoing } from 'lucide-react';
@@ -353,7 +354,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
   // Optimization: Call Log Bubbles should be slim and compact to prevent spam
   const bubblePaddingClass = isCallLog 
     ? 'p-1.5 px-3' // Very compact for calls
-    : (jumboClass || isSticker ? '' : 'px-4 py-2.5'); // Standard for others
+    : (jumboClass || isSticker ? '' : 'px-3 py-2'); // Tight padding for better timestamp fit
 
   // Sticker container should be transparent and borderless
   const bubbleClasses = isSticker 
@@ -587,7 +588,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
           {/* Timestamp Container (Hidden for stickers as they have their own) */}
           {!isSticker && (
               <div className={`
-                  flex items-center justify-end gap-1 mt-1 select-none flex-wrap w-full
+                  flex items-center justify-end gap-1 mt-0.5 select-none flex-wrap w-full
                   ${jumboClass
                     ? 'text-gray-500 dark:text-gray-400' 
                     : (isOwn ? 'text-brand-100' : 'text-gray-400')
@@ -595,7 +596,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isOwn, on
                   ${jumboClass || isCallLog ? 'px-2 pb-1' : ''}
               `}>
                 {isEdited && <span className="text-[10px] opacity-80">modifié</span>}
-                <span className="text-[10px] opacity-80 whitespace-nowrap">
+                <span className="text-[10px] opacity-80 whitespace-nowrap leading-none">
                   {new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
                 {isOwn && !isDeleted && (
